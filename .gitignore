@@ -1,0 +1,12 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Generated outputs
+/toy_ff_generator/outputs/
+/portfolio_attention/outputs/
+/mt toy model/result/
+
+# Large font file
+/mt toy model/SourceHanSansSC-Regular.otf

@@ -1,0 +1,513 @@
+"""Export best-epoch comparison tables for multiple result directories."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+from numbers import Integral, Real
+from pathlib import Path
+import sys
+from typing import Any
+
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+STATE_NAMES = ("bear", "neutral", "bull")
+LOSS_NAMES = ("sharpe",)
+# Edit these when switching the comparison targets.
+RESULT_DIR_1 = PROJECT_DIR / "outputs" / "result v9 learnable stock embedding"
+RESULT_DIR_2 = PROJECT_DIR / "outputs" / "result v15 temp attention concat stock embedding non linear"
+RESULT_DIR_3 = PROJECT_DIR / "outputs" / "result v14 temp attention add stock embedding nom fix"
+RESULT_DIR_4 = PROJECT_DIR / "outputs" / "result v16 temp stock attention add"
+OUTPUT_DIR = PROJECT_DIR / "outputs"
+# Leave blank to auto-generate a readable label from the directory name.
+LABEL_1 = "mlp concat"
+LABEL_2 = "temp concat"
+LABEL_3 = "temp add"
+LABEL_4 = "temp stock add"
+COMPARISON_CSV_NAME = "best_epoch_state_loss_comparison.csv"
+SUMMARY_CSV_NAME = "best_epoch_state_summary.csv"
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Export best-epoch comparison CSV files for four result directories."
+    )
+    parser.add_argument(
+        "--dir-1",
+        "--mlp-dir",
+        dest="dir_1",
+        type=Path,
+        default=RESULT_DIR_1,
+        help="Directory containing the first set of state folders.",
+    )
+    parser.add_argument(
+        "--dir-2",
+        "--attention-dir",
+        dest="dir_2",
+        type=Path,
+        default=RESULT_DIR_2,
+        help="Directory containing the second set of state folders.",
+    )
+    parser.add_argument(
+        "--dir-3",
+        dest="dir_3",
+        type=Path,
+        default=RESULT_DIR_3,
+        help="Directory containing the third set of state folders.",
+    )
+    parser.add_argument(
+        "--dir-4",
+        dest="dir_4",
+        type=Path,
+        default=RESULT_DIR_4,
+        help="Directory containing the fourth set of state folders.",
+    )
+    parser.add_argument(
+        "--label-1",
+        default=LABEL_1,
+        help="Display label for the first result set. Defaults to a prettified directory name.",
+    )
+    parser.add_argument(
+        "--label-2",
+        default=LABEL_2,
+        help="Display label for the second result set. Defaults to a prettified directory name.",
+    )
+    parser.add_argument(
+        "--label-3",
+        default=LABEL_3,
+        help="Display label for the third result set. Defaults to a prettified directory name.",
+    )
+    parser.add_argument(
+        "--label-4",
+        default=LABEL_4,
+        help="Display label for the fourth result set. Defaults to a prettified directory name.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=OUTPUT_DIR,
+        help="Directory where the CSV files should be written.",
+    )
+    return parser
+
+
+def _prettify_label(raw_label: str) -> str:
+    tokens = raw_label.replace("_", " ").replace("-", " ").split()
+    pretty_tokens: list[str] = []
+    for token in tokens:
+        if token.isupper():
+            pretty_tokens.append(token)
+            continue
+        if len(token) > 1 and token[0].lower() == "v" and token[1:].isdigit():
+            pretty_tokens.append(token.upper())
+            continue
+        if token.isdigit():
+            pretty_tokens.append(token)
+            continue
+        pretty_tokens.append(token.capitalize())
+    return " ".join(pretty_tokens)
+
+
+def _resolve_display_label(raw_label: str, result_dir: Path, fallback_label: str) -> str:
+    label = str(raw_label).strip()
+    if label:
+        return label
+    prettified = _prettify_label(result_dir.name)
+    return prettified or fallback_label
+
+
+def _require_distinct_labels(labels: list[str]) -> None:
+    if len(set(labels)) != len(labels):
+        raise ValueError(
+            "All labels must be distinct so the exported columns remain unambiguous."
+        )
+
+
+def _load_manifest(manifest_path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Missing manifest: {manifest_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Failed to parse JSON manifest: {manifest_path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"Manifest must contain a JSON object: {manifest_path}")
+    return payload
+
+
+def _coerce_float(value: Any, *, field_name: str, manifest_path: Path, scenario_id: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Scenario {scenario_id!r} in {manifest_path} has invalid {field_name}: {value!r}"
+        ) from exc
+
+
+def _extract_epoch_from_dir(epoch_dir: Path) -> int:
+    token = epoch_dir.name.split("_", 1)[0].strip()
+    if not token:
+        raise ValueError(f"Epoch directory name is invalid: {epoch_dir}")
+    try:
+        epoch = int(token)
+    except ValueError as exc:
+        raise ValueError(f"Epoch directory does not start with an integer: {epoch_dir}") from exc
+    if epoch <= 0:
+        raise ValueError(f"Epoch must be positive in directory name: {epoch_dir}")
+    return epoch
+
+
+def _mean(values: list[float], *, context: str) -> float:
+    if not values:
+        raise ValueError(f"Cannot compute mean for empty value list: {context}")
+    return sum(values) / len(values)
+
+
+def _format_scenario_id(raw_scenario_id: str) -> str:
+    token = str(raw_scenario_id).strip()
+    if not token:
+        raise ValueError("Scenario id cannot be empty.")
+    parts = token.split("_")
+    if parts and parts[-1].isdigit():
+        return parts[-1]
+    raise ValueError(f"Scenario id does not end with a numeric suffix: {raw_scenario_id!r}")
+
+
+def _scenario_metrics_from_manifest(
+    manifest_path: Path,
+) -> list[dict[str, float | str]]:
+    payload = _load_manifest(manifest_path)
+    scenario_artifacts = payload.get("scenario_artifacts")
+    if not isinstance(scenario_artifacts, list) or not scenario_artifacts:
+        raise ValueError(f"Manifest must provide a non-empty scenario_artifacts list: {manifest_path}")
+
+    rows: list[dict[str, float | str]] = []
+    for item in scenario_artifacts:
+        if not isinstance(item, dict):
+            raise ValueError(f"Manifest scenario_artifacts entries must be objects: {manifest_path}")
+        scenario_id = str(item.get("scenario_id", "")).strip()
+        if not scenario_id:
+            raise ValueError(f"Manifest scenario_artifacts entries must include scenario_id: {manifest_path}")
+        rows.append(
+            {
+                "scenario_id": _format_scenario_id(scenario_id),
+                "portfolio_return": _coerce_float(
+                    item.get("final_return"),
+                    field_name="final_return",
+                    manifest_path=manifest_path,
+                    scenario_id=scenario_id,
+                ),
+                "portfolio_sr": _coerce_float(
+                    item.get("backtest_portfolio_sr"),
+                    field_name="backtest_portfolio_sr",
+                    manifest_path=manifest_path,
+                    scenario_id=scenario_id,
+                ),
+                "selected_stock_count": _coerce_float(
+                    item.get("total_selected_stock_count"),
+                    field_name="total_selected_stock_count",
+                    manifest_path=manifest_path,
+                    scenario_id=scenario_id,
+                ),
+            }
+        )
+    return rows
+
+
+def _collect_state_epoch_manifests(state_dir: Path) -> tuple[dict[int, dict[str, Path]], list[dict[str, Any]]]:
+    if not state_dir.is_dir():
+        raise FileNotFoundError(f"State directory does not exist: {state_dir}")
+
+    epoch_to_manifests: dict[int, dict[str, Path]] = {}
+    skipped_epochs: list[dict[str, Any]] = []
+    for epoch_dir in sorted(path for path in state_dir.iterdir() if path.is_dir()):
+        epoch = _extract_epoch_from_dir(epoch_dir)
+        manifest_paths = {
+            loss_name: epoch_dir / f"{loss_name}_monitoring_holdout_backtest.json"
+            for loss_name in LOSS_NAMES
+        }
+        missing = [str(path) for path in manifest_paths.values() if not path.is_file()]
+        if missing:
+            skipped_epochs.append(
+                {
+                    "epoch": epoch,
+                    "epoch_dir": str(epoch_dir),
+                    "missing_manifests": missing,
+                }
+            )
+            continue
+        epoch_to_manifests[epoch] = manifest_paths
+
+    if not epoch_to_manifests:
+        raise ValueError(f"No complete epoch directories were found in {state_dir}")
+    return epoch_to_manifests, skipped_epochs
+
+
+def _epoch_aggregate_from_manifests(epoch_manifests: dict[str, Path]) -> dict[str, Any]:
+    per_loss_scenarios: dict[str, dict[str, dict[str, float | str]]] = {}
+    sr_values: list[float] = []
+    return_values: list[float] = []
+
+    for loss_name in LOSS_NAMES:
+        manifest_path = epoch_manifests[loss_name]
+        rows = _scenario_metrics_from_manifest(manifest_path)
+        scenario_map: dict[str, dict[str, float | str]] = {}
+        for row in rows:
+            scenario_id = str(row["scenario_id"])
+            scenario_map[scenario_id] = row
+            sr_values.append(float(row["portfolio_sr"]))
+            return_values.append(float(row["portfolio_return"]))
+        per_loss_scenarios[loss_name] = scenario_map
+
+    return {
+        "epoch_mean_sr": _mean(sr_values, context="epoch_mean_sr"),
+        "epoch_mean_return": _mean(return_values, context="epoch_mean_return"),
+        "per_loss_scenarios": per_loss_scenarios,
+    }
+
+
+def _select_best_epoch(state_dir: Path) -> dict[str, Any]:
+    epoch_manifests, skipped_epochs = _collect_state_epoch_manifests(state_dir)
+    best_payload: dict[str, Any] | None = None
+
+    for epoch in sorted(epoch_manifests):
+        aggregate = _epoch_aggregate_from_manifests(epoch_manifests[epoch])
+        candidate = {
+            "epoch": epoch,
+            "epoch_mean_sr": aggregate["epoch_mean_sr"],
+            "epoch_mean_return": aggregate["epoch_mean_return"],
+            "per_loss_scenarios": aggregate["per_loss_scenarios"],
+        }
+        if best_payload is None:
+            best_payload = candidate
+            continue
+
+        if candidate["epoch_mean_sr"] > best_payload["epoch_mean_sr"]:
+            best_payload = candidate
+        elif (
+            candidate["epoch_mean_sr"] == best_payload["epoch_mean_sr"]
+            and candidate["epoch"] < best_payload["epoch"]
+        ):
+            # Keep the earlier epoch on exact ties so the choice is deterministic.
+            best_payload = candidate
+
+    if best_payload is None:
+        raise ValueError(f"Failed to select a best epoch for {state_dir}")
+    best_payload["skipped_epochs"] = skipped_epochs
+    return best_payload
+
+
+def _average_loss_rows(
+    loss_scenarios: dict[str, dict[str, float | str]],
+    *,
+    context: str,
+) -> tuple[float, float, float]:
+    return_values = [float(item["portfolio_return"]) for item in loss_scenarios.values()]
+    sr_values = [float(item["portfolio_sr"]) for item in loss_scenarios.values()]
+    selected_stock_counts = [float(item["selected_stock_count"]) for item in loss_scenarios.values()]
+    return (
+        _mean(return_values, context=f"{context}: portfolio_return"),
+        _mean(sr_values, context=f"{context}: portfolio_sr"),
+        _mean(selected_stock_counts, context=f"{context}: selected_stock_count"),
+    )
+
+
+def _build_comparison_rows(
+    best_by_label: list[tuple[str, dict[str, dict[str, Any]]]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    for state in STATE_NAMES:
+        state_payloads = [(label, best_by_state[state]) for label, best_by_state in best_by_label]
+
+        for loss_name in LOSS_NAMES:
+            loss_rows_by_label = {
+                label: best_payload["per_loss_scenarios"][loss_name]
+                for label, best_payload in state_payloads
+            }
+
+            average_row: dict[str, Any] = {
+                "state": state,
+                "loss": loss_name,
+                "row_type": "average",
+                "scenario_id": "",
+            }
+            for label, best_payload in state_payloads:
+                average_row[f"{label}_best_epoch"] = best_payload["epoch"]
+                avg_return, avg_sr, _ = _average_loss_rows(
+                    loss_rows_by_label[label],
+                    context=f"{state}/{loss_name}/{label}",
+                )
+                average_row[f"{label}_return"] = avg_return
+                average_row[f"{label}_sr"] = avg_sr
+            rows.append(average_row)
+
+            all_scenario_ids = sorted(
+                {
+                    scenario_id
+                    for loss_rows in loss_rows_by_label.values()
+                    for scenario_id in loss_rows
+                }
+            )
+            for scenario_id in all_scenario_ids:
+                scenario_row: dict[str, Any] = {
+                    "state": state,
+                    "loss": loss_name,
+                    "row_type": "scenario",
+                    "scenario_id": scenario_id,
+                }
+                for label, best_payload in state_payloads:
+                    row = loss_rows_by_label[label].get(scenario_id)
+                    scenario_row[f"{label}_best_epoch"] = best_payload["epoch"]
+                    scenario_row[f"{label}_return"] = (
+                        float(row["portfolio_return"]) if row is not None else ""
+                    )
+                    scenario_row[f"{label}_sr"] = (
+                        float(row["portfolio_sr"]) if row is not None else ""
+                    )
+                rows.append(scenario_row)
+
+    return rows
+
+
+def _build_summary_rows(
+    best_by_label: list[tuple[str, dict[str, dict[str, Any]]]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for state in STATE_NAMES:
+        state_payloads = [(label, best_by_state[state]) for label, best_by_state in best_by_label]
+        row: dict[str, Any] = {"state": state}
+        for label, best_payload in state_payloads:
+            row[f"{label}_best_epoch"] = best_payload["epoch"]
+        for loss_name in LOSS_NAMES:
+            mean_return_by_label: dict[str, float] = {}
+            mean_sr_by_label: dict[str, float] = {}
+            mean_stocks_by_label: dict[str, float] = {}
+            for label, best_payload in state_payloads:
+                avg_return, avg_sr, avg_stocks_bought = _average_loss_rows(
+                    best_payload["per_loss_scenarios"][loss_name],
+                    context=f"{state}/{loss_name}/{label}/summary",
+                )
+                mean_return_by_label[label] = avg_return
+                mean_sr_by_label[label] = avg_sr
+                mean_stocks_by_label[label] = avg_stocks_bought
+            for label, _ in state_payloads:
+                row[f"{label}_{loss_name}_mean_return"] = mean_return_by_label[label]
+            for label, _ in state_payloads:
+                row[f"{label}_{loss_name}_mean_sr"] = mean_sr_by_label[label]
+            for label, _ in state_payloads:
+                row[f"{label}_{loss_name}_mean_stocks"] = mean_stocks_by_label[label]
+        rows.append(row)
+    return rows
+
+
+def _write_csv(output_path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            normalized_row = {
+                key: (
+                    round(float(value))
+                    if key.endswith("_mean_stocks") and isinstance(value, Real)
+                    else round(float(value), 2)
+                    if isinstance(value, Real) and not isinstance(value, Integral)
+                    else value
+                )
+                for key, value in row.items()
+            }
+            writer.writerow(normalized_row)
+
+
+def main() -> None:
+    args = build_arg_parser().parse_args()
+    output_dir = args.output_dir.resolve()
+    result_dirs = [
+        args.dir_1.resolve(),
+        args.dir_2.resolve(),
+        args.dir_3.resolve(),
+        args.dir_4.resolve(),
+    ]
+    labels = [
+        _resolve_display_label(args.label_1, result_dirs[0], "Label 1"),
+        _resolve_display_label(args.label_2, result_dirs[1], "Label 2"),
+        _resolve_display_label(args.label_3, result_dirs[2], "Label 3"),
+        _resolve_display_label(args.label_4, result_dirs[3], "Label 4"),
+    ]
+    _require_distinct_labels(labels)
+
+    best_by_label = [
+        (
+            label,
+            {state: _select_best_epoch(result_dir / state) for state in STATE_NAMES},
+        )
+        for label, result_dir in zip(labels, result_dirs)
+    ]
+
+    comparison_rows = _build_comparison_rows(
+        best_by_label,
+    )
+    summary_rows = _build_summary_rows(
+        best_by_label,
+    )
+
+    comparison_path = output_dir / COMPARISON_CSV_NAME
+    summary_path = output_dir / SUMMARY_CSV_NAME
+    _write_csv(
+        comparison_path,
+        comparison_rows,
+        fieldnames=[
+            "state",
+            "loss",
+            "row_type",
+            "scenario_id",
+            *[f"{label}_best_epoch" for label in labels],
+            *[f"{label}_return" for label in labels],
+            *[f"{label}_sr" for label in labels],
+        ],
+    )
+    _write_csv(
+        summary_path,
+        summary_rows,
+        fieldnames=[
+            "state",
+            *[f"{label}_best_epoch" for label in labels],
+            *[
+                field_name
+                for loss_name in LOSS_NAMES
+                for field_name in (
+                    *[f"{label}_{loss_name}_mean_return" for label in labels],
+                    *[f"{label}_{loss_name}_mean_sr" for label in labels],
+                    *[f"{label}_{loss_name}_mean_stocks" for label in labels],
+                )
+            ],
+        ],
+    )
+
+    status_payload = {
+        "comparison_csv": str(comparison_path),
+        "summary_csv": str(summary_path),
+        "states": {
+            state: {
+                **{
+                    f"{label}_best_epoch": best_by_state[state]["epoch"]
+                    for label, best_by_state in best_by_label
+                },
+                **{
+                    f"{label}_skipped_epochs": best_by_state[state]["skipped_epochs"]
+                    for label, best_by_state in best_by_label
+                },
+            }
+            for state in STATE_NAMES
+        },
+    }
+    print(json.dumps(status_payload, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
