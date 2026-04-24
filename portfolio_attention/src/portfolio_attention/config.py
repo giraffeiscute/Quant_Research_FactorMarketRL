@@ -152,7 +152,7 @@ class TrainConfig:
     select_best_from_last_x_epochs: int = 1
     holdout_backtest_interval_epochs: int = 1
     enable_fixed_epoch_holdout_backtests: bool = False
-    turnover_penalty: float = 0.003
+    turnover_penalty: float = 0.01
     turnover_penalty_norm: str = "l1"
     transaction_cost_rate: float = 0.0
     loss_name: str = ""
