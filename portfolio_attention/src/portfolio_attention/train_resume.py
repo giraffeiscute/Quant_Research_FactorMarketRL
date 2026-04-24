@@ -20,6 +20,8 @@ if __package__ is None or __package__ == "":
         ModelConfig,
         PathsConfig,
         TrainConfig,
+    )
+    from portfolio_attention.config_validation import (
         normalize_model_config_dict,
         raise_if_checkpoint_uses_legacy_stock_id_representation_type,
     )
@@ -31,6 +33,8 @@ else:
         ModelConfig,
         PathsConfig,
         TrainConfig,
+    )
+    from .config_validation import (
         normalize_model_config_dict,
         raise_if_checkpoint_uses_legacy_stock_id_representation_type,
     )
@@ -249,12 +253,17 @@ def _validate_resume_checkpoint(
 
     current_train_config = _serialize_config(train_config)
     ignored_train_keys = {"num_epochs", "device", "resume_from"}
+    legacy_missing_train_config_defaults = {
+        "enable_fixed_epoch_holdout_backtests": False,
+        "turnover_penalty": 0.0,
+        "transaction_cost_rate": 0.0,
+    }
     for key, expected_value in current_train_config.items():
         if key in ignored_train_keys:
             continue
         checkpoint_value = checkpoint_train_config.get(key)
-        if key == "enable_fixed_epoch_holdout_backtests" and key not in checkpoint_train_config:
-            checkpoint_value = False
+        if key not in checkpoint_train_config and key in legacy_missing_train_config_defaults:
+            checkpoint_value = legacy_missing_train_config_defaults[key]
         if checkpoint_value != expected_value:
             raise ValueError(
                 "Resume checkpoint train_config does not match the current training configuration. "

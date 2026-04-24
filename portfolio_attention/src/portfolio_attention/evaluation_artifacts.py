@@ -38,7 +38,6 @@ BENCHMARK_COMPARISON_FIELD_KEYS = (
     "benchmark_market_index_csv",
     "benchmark_excess_return",
     "benchmark_information_ratio",
-    "benchmark_excess_max_drawdown",
 )
 
 
@@ -77,6 +76,26 @@ def _extract_exported_train_config(checkpoint: dict[str, Any]) -> dict[str, obje
 
 def _compute_backtest_portfolio_sr(portfolio_returns: torch.Tensor) -> float:
     return float((-sharpe_loss(portfolio_returns.detach().cpu()).item()))
+
+
+def _compute_average_turnover(stock_weights: torch.Tensor, cash_weights: torch.Tensor) -> float:
+    resolved_stock_weights = stock_weights.detach().cpu()
+    resolved_cash_weights = cash_weights.detach().cpu()
+    if resolved_stock_weights.ndim != 2:
+        raise ValueError("stock_weights must have shape [T, N] when computing turnover.")
+    if resolved_cash_weights.ndim != 1:
+        raise ValueError("cash_weights must have shape [T] when computing turnover.")
+    if int(resolved_stock_weights.shape[0]) != int(resolved_cash_weights.shape[0]):
+        raise ValueError("stock_weights and cash_weights must share the same time dimension.")
+    if int(resolved_stock_weights.shape[0]) < 2:
+        return 0.0
+
+    allocation_weights = torch.cat(
+        (resolved_stock_weights, resolved_cash_weights.unsqueeze(-1)),
+        dim=1,
+    )
+    daily_turnover = 0.5 * torch.abs(allocation_weights[1:] - allocation_weights[:-1]).sum(dim=1)
+    return float(daily_turnover.mean().item())
 
 
 def _resolve_benchmark_market_index_path(source_path: Path) -> Path:
@@ -164,30 +183,6 @@ def _compute_information_ratio(
     return active_mean / active_std
 
 
-def _compute_excess_max_drawdown(
-    active_returns: np.ndarray,
-    *,
-    eps: float = 1e-12,
-) -> float | None:
-    resolved_active_returns = np.asarray(active_returns, dtype=np.float64)
-    if resolved_active_returns.ndim != 1 or resolved_active_returns.size == 0:
-        return None
-    if not np.isfinite(resolved_active_returns).all():
-        return None
-    active_equity = np.concatenate(
-        (
-            np.asarray([1.0], dtype=np.float64),
-            np.cumprod(1.0 + resolved_active_returns, dtype=np.float64),
-        )
-    )
-    running_peak = np.maximum.accumulate(active_equity)
-    drawdown = (running_peak - active_equity) / np.maximum(running_peak, eps)
-    max_drawdown = float(np.max(drawdown))
-    if not np.isfinite(max_drawdown):
-        return None
-    return max_drawdown
-
-
 def _compute_benchmark_comparison_metrics(
     *,
     source_path: Path,
@@ -207,7 +202,6 @@ def _compute_benchmark_comparison_metrics(
             "benchmark_market_index_csv": benchmark_market_index_csv,
             "benchmark_excess_return": None,
             "benchmark_information_ratio": None,
-            "benchmark_excess_max_drawdown": None,
         }
 
     benchmark_final_return = float(np.prod(1.0 + benchmark_returns, dtype=np.float64) - 1.0)
@@ -217,7 +211,6 @@ def _compute_benchmark_comparison_metrics(
         "benchmark_market_index_csv": benchmark_market_index_csv,
         "benchmark_excess_return": portfolio_final_return - benchmark_final_return,
         "benchmark_information_ratio": _compute_information_ratio(active_returns),
-        "benchmark_excess_max_drawdown": _compute_excess_max_drawdown(active_returns),
     }
 
 
@@ -307,7 +300,7 @@ def _build_monitoring_scenario_artifact(
         portfolio_sr=float(scenario_result.return_stats.backtest_portfolio_sr),
         benchmark_excess_return=scenario_result.benchmark_metrics.benchmark_excess_return,
         benchmark_information_ratio=scenario_result.benchmark_metrics.benchmark_information_ratio,
-        benchmark_excess_max_drawdown=scenario_result.benchmark_metrics.benchmark_excess_max_drawdown,
+        average_turnover=float(scenario_result.return_stats.average_turnover),
         selected_stock_count=int(scenario_result.selection_stats.total_selected_stock_count),
         stock_count_weight_threshold=float(scenario_result.selection_stats.stock_count_weight_threshold),
     )
@@ -332,10 +325,10 @@ def _build_monitoring_scenario_artifact(
         "evaluation_mode": scenario_result.window_meta.evaluation_mode,
         "final_return": float(scenario_result.return_stats.final_return),
         "backtest_portfolio_sr": float(scenario_result.return_stats.backtest_portfolio_sr),
+        "average_turnover": float(scenario_result.return_stats.average_turnover),
         "benchmark_market_index_csv": scenario_result.benchmark_metrics.benchmark_market_index_csv,
         "benchmark_excess_return": scenario_result.benchmark_metrics.benchmark_excess_return,
         "benchmark_information_ratio": scenario_result.benchmark_metrics.benchmark_information_ratio,
-        "benchmark_excess_max_drawdown": scenario_result.benchmark_metrics.benchmark_excess_max_drawdown,
         "rolling_window_lookback_days": scenario_result.window_meta.rolling_window_lookback_days,
         "rolling_window_horizon_days": scenario_result.window_meta.rolling_window_horizon_days,
         "rolling_window_stride_days": scenario_result.window_meta.rolling_window_stride_days,
@@ -411,6 +404,10 @@ def _build_holdout_summary_payload(
         [float(item.return_stats.final_return) for item in scenario_results],
         dtype=np.float64,
     )
+    average_turnovers = np.asarray(
+        [float(item.return_stats.average_turnover) for item in scenario_results],
+        dtype=np.float64,
+    )
     best_index = int(final_returns.argmax())
     worst_index = int(final_returns.argmin())
     best_payload = scenario_results[best_index]
@@ -438,6 +435,7 @@ def _build_holdout_summary_payload(
         "evaluation_split": evaluation_split,
         "num_holdout_scenarios": len(scenario_results),
         "mean_final_return": float(final_returns.mean()),
+        "mean_average_turnover": float(average_turnovers.mean()),
         "std_final_return": float(final_returns.std(ddof=0)),
         "median_final_return": float(np.median(final_returns)),
         "worst_scenario_final_return": float(final_returns.min()),
@@ -515,6 +513,7 @@ def _build_per_scenario_payload(
     mean_cash_weight = float(cash_weights_cpu.mean().item())
     mean_step_return = float(path_returns_cpu.mean().item())
     std_step_return = float(path_returns_cpu.std(unbiased=False).item())
+    average_turnover = _compute_average_turnover(stock_weights_cpu, cash_weights_cpu)
 
     top_k = min(5, dataset.num_stocks)
     final_stock_weights = stock_weights_cpu[-1]
@@ -606,6 +605,7 @@ def _build_per_scenario_payload(
             backtest_portfolio_sr=backtest_portfolio_sr,
             mean_step_return=mean_step_return,
             std_step_return=std_step_return,
+            average_turnover=average_turnover,
             sharpe_like=backtest_portfolio_sr if loss_name == "sharpe" else None,
         ),
         cash_stats=ScenarioCashStats(
@@ -627,9 +627,6 @@ def _build_per_scenario_payload(
             benchmark_excess_return=evaluation_shared.coerce_optional_float(benchmark_metrics.get("benchmark_excess_return")),
             benchmark_information_ratio=evaluation_shared.coerce_optional_float(
                 benchmark_metrics.get("benchmark_information_ratio")
-            ),
-            benchmark_excess_max_drawdown=evaluation_shared.coerce_optional_float(
-                benchmark_metrics.get("benchmark_excess_max_drawdown")
             ),
         ),
         train_config=_extract_exported_train_config(checkpoint),
@@ -715,6 +712,7 @@ def _export_scenario_payload(
         loss_name=loss_name,
         portfolio_return=float(scenario_result.return_stats.final_return),
         portfolio_sr=float(scenario_result.return_stats.backtest_portfolio_sr),
+        average_turnover=float(scenario_result.return_stats.average_turnover),
         selected_stock_count=total_selected_stock_count,
         stock_count_weight_threshold=stock_count_weight_threshold,
     )
@@ -791,10 +789,10 @@ def _export_scenario_payload(
         "evaluation_mode": scenario_result.window_meta.evaluation_mode,
         "final_return": float(scenario_result.return_stats.final_return),
         "backtest_portfolio_sr": float(scenario_result.return_stats.backtest_portfolio_sr),
+        "average_turnover": float(scenario_result.return_stats.average_turnover),
         "benchmark_market_index_csv": scenario_result.benchmark_metrics.benchmark_market_index_csv,
         "benchmark_excess_return": scenario_result.benchmark_metrics.benchmark_excess_return,
         "benchmark_information_ratio": scenario_result.benchmark_metrics.benchmark_information_ratio,
-        "benchmark_excess_max_drawdown": scenario_result.benchmark_metrics.benchmark_excess_max_drawdown,
         "rolling_window_lookback_days": scenario_result.window_meta.rolling_window_lookback_days,
         "rolling_window_horizon_days": scenario_result.window_meta.rolling_window_horizon_days,
         "rolling_window_stride_days": scenario_result.window_meta.rolling_window_stride_days,
@@ -910,6 +908,10 @@ def compute_monitoring_holdout_backtest_loss(
     loss_name: str,
 ) -> float:
     return _compute_monitoring_holdout_backtest_loss(per_scenario_payloads, loss_name=loss_name)
+
+
+def compute_average_turnover(stock_weights: torch.Tensor, cash_weights: torch.Tensor) -> float:
+    return _compute_average_turnover(stock_weights, cash_weights)
 
 
 def strip_monitoring_transient_tensor_fields(per_scenario_payloads: list[dict[str, Any]]) -> None:

@@ -190,6 +190,24 @@ def _compute_selected_stock_count_from_weights(
     return selected_stock_count
 
 
+def _compute_average_turnover_from_weights(
+    stock_weights: torch.Tensor,
+    cash_weights: torch.Tensor,
+) -> float:
+    if stock_weights.ndim != 2:
+        raise ValueError("stock_weights must have shape [T, N].")
+    if cash_weights.ndim != 1:
+        raise ValueError("cash_weights must have shape [T].")
+    if int(stock_weights.shape[0]) != int(cash_weights.shape[0]):
+        raise ValueError("stock_weights and cash_weights must share the same time dimension.")
+    if int(stock_weights.shape[0]) < 2:
+        return 0.0
+
+    allocation_weights = torch.cat((stock_weights, cash_weights.unsqueeze(-1)), dim=1)
+    daily_turnover = 0.5 * torch.abs(allocation_weights[1:] - allocation_weights[:-1]).sum(dim=1)
+    return float(daily_turnover.mean().item())
+
+
 class ScenarioRollingValidationMetric(Metric):
     """Aggregate scenario-level validation outputs across DDP workers."""
 
@@ -206,6 +224,7 @@ class ScenarioRollingValidationMetric(Metric):
             dist_reduce_fx="sum",
         )
         self.add_state("selected_stock_count_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("average_turnover_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
 
     def update(
         self,
@@ -214,6 +233,7 @@ class ScenarioRollingValidationMetric(Metric):
         scenario_final_return: torch.Tensor | float,
         num_rolling_windows: torch.Tensor | int,
         selected_stock_count: torch.Tensor | int | float,
+        average_turnover: torch.Tensor | float,
         scenario_count: torch.Tensor | int = 1,
     ) -> None:
         self.loss_sum += torch.as_tensor(loss_value, device=self.loss_sum.device, dtype=self.loss_sum.dtype)
@@ -237,6 +257,11 @@ class ScenarioRollingValidationMetric(Metric):
             device=self.selected_stock_count_sum.device,
             dtype=self.selected_stock_count_sum.dtype,
         )
+        self.average_turnover_sum += torch.as_tensor(
+            average_turnover,
+            device=self.average_turnover_sum.device,
+            dtype=self.average_turnover_sum.dtype,
+        )
 
     def compute(self) -> dict[str, torch.Tensor]:
         if int(self.scenario_count.item()) <= 0:
@@ -247,6 +272,7 @@ class ScenarioRollingValidationMetric(Metric):
                 "val_mean_final_return": zero,
                 "validation_num_rolling_windows_total": zero_count,
                 "validation_stocks_bought": zero,
+                "validation_average_turnover": zero,
             }
 
         scenario_count = self.scenario_count.to(dtype=self.loss_sum.dtype)
@@ -255,6 +281,7 @@ class ScenarioRollingValidationMetric(Metric):
             "val_mean_final_return": self.final_return_sum / scenario_count,
             "validation_num_rolling_windows_total": self.rolling_window_count.clone(),
             "validation_stocks_bought": self.selected_stock_count_sum / scenario_count,
+            "validation_average_turnover": self.average_turnover_sum / scenario_count,
         }
 
 
@@ -307,6 +334,8 @@ class PortfolioLightningModule(pl.LightningModule):
             self.model,
             batch,
             self.train_config.loss_name,
+            turnover_penalty=self.train_config.turnover_penalty,
+            transaction_cost_rate=self.train_config.transaction_cost_rate,
         )
         train_mean_final_return = summary["scenario_final_returns"].mean()
         batch_size = int(summary["scenario_final_returns"].numel())
@@ -342,12 +371,17 @@ class PortfolioLightningModule(pl.LightningModule):
             threshold=self.stock_count_weight_threshold,
             min_active_days=self.stock_count_min_active_days,
         )
+        average_turnover = _compute_average_turnover_from_weights(
+            rolling_outputs["stock_weights"],
+            rolling_outputs["cash_weights"],
+        )
 
         self.val_metric.update(
             loss_value=loss.detach(),
             scenario_final_return=scenario_final_return.detach(),
             num_rolling_windows=int(rolling_outputs["num_rolling_windows"]),
             selected_stock_count=selected_stock_count,
+            average_turnover=average_turnover,
         )
 
     def on_validation_epoch_end(self) -> None:
@@ -369,6 +403,11 @@ class PortfolioLightningModule(pl.LightningModule):
         self._log_validation_epoch_metric(
             "validation_stocks_bought",
             metrics["validation_stocks_bought"],
+            prog_bar=False,
+        )
+        self._log_validation_epoch_metric(
+            "validation_average_turnover",
+            metrics["validation_average_turnover"],
             prog_bar=False,
         )
 

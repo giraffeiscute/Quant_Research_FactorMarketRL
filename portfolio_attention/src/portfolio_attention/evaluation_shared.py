@@ -165,7 +165,7 @@ def is_weight_above_threshold(weight: float, *, threshold: float) -> bool:
 def format_optional_metric(value: float | None) -> str:
     if value is None or not np.isfinite(float(value)):
         return "N/A"
-    return f"{float(value):.6f}"
+    return f"{float(value):.4f}"
 
 
 def coerce_optional_float(value: object) -> float | None:
@@ -189,18 +189,19 @@ def build_chart_metrics_text(
     portfolio_sr: float,
     benchmark_excess_return: float | None = None,
     benchmark_information_ratio: float | None = None,
-    benchmark_excess_max_drawdown: float | None = None,
+    average_turnover: float | None = None,
     selected_stock_count: int | None = None,
     stock_count_weight_threshold: float | None = None,
 ) -> str:
     lines = [
         f"Loss: {loss_name}",
-        f"Portfolio Return: {portfolio_return:.6f}",
-        f"Portfolio SR: {portfolio_sr:.6f}",
+        f"Portfolio Return: {portfolio_return:.4f}",
+        f"Portfolio SR: {portfolio_sr:.4f}",
         f"Benchmark Excess Return: {format_optional_metric(benchmark_excess_return)}",
         f"Benchmark IR: {format_optional_metric(benchmark_information_ratio)}",
-        f"Benchmark EMDD: {format_optional_metric(benchmark_excess_max_drawdown)}",
     ]
+    if average_turnover is not None:
+        lines.append(f"Avg Turnover: {float(average_turnover):.4f}")
     if selected_stock_count is not None:
         if stock_count_weight_threshold is None:
             raise ValueError("stock_count_weight_threshold is required when selected_stock_count is provided.")

@@ -17,8 +17,12 @@ if __package__ is None or __package__ == "":
         DataConfig,
         ModelConfig,
         PathsConfig,
+    )
+    from portfolio_attention.config_validation import (
         normalize_model_config_dict,
         raise_if_checkpoint_uses_legacy_stock_id_representation_type,
+        validated_data_config,
+        validated_model_config,
     )
 else:
     from . import artifact_paths, evaluate_rebuild, evaluation_pipeline
@@ -26,8 +30,12 @@ else:
         DataConfig,
         ModelConfig,
         PathsConfig,
+    )
+    from .config_validation import (
         normalize_model_config_dict,
         raise_if_checkpoint_uses_legacy_stock_id_representation_type,
+        validated_data_config,
+        validated_model_config,
     )
 
 TERMINAL_OUTPUT_KEYS = [
@@ -35,6 +43,7 @@ TERMINAL_OUTPUT_KEYS = [
     "loss_name",
     "num_holdout_scenarios",
     "mean_final_return",
+    "mean_average_turnover",
     "std_final_return",
     "median_final_return",
     "worst_scenario_final_return",
@@ -95,7 +104,7 @@ def _build_model_config_from_checkpoint(checkpoint: dict[str, Any]) -> ModelConf
         for key, value in normalized_model_config.items()
         if key in ModelConfig.__dataclass_fields__
     }
-    return ModelConfig(**filtered_config_dict)
+    return validated_model_config(ModelConfig(**filtered_config_dict))
 
 
 def _build_data_config_from_checkpoint(
@@ -112,11 +121,11 @@ def _build_data_config_from_checkpoint(
         if key in DataConfig.__dataclass_fields__
     }
     if not filtered_config_dict:
-        return fallback_data_config
+        return validated_data_config(fallback_data_config)
 
     fallback_dict = fallback_data_config.__dict__.copy()
     fallback_dict.update(filtered_config_dict)
-    return DataConfig(**fallback_dict)
+    return validated_data_config(DataConfig(**fallback_dict))
 
 
 def _validate_requested_runtime_configs_against_checkpoint(
@@ -283,14 +292,14 @@ def resolve_data_config_from_args(
     *,
     data_config: DataConfig | None = None,
 ) -> DataConfig:
-    resolved_data_config = data_config or DataConfig()
+    resolved_data_config = validated_data_config(data_config or DataConfig())
     args_dict = vars(args)
     data_overrides: dict[str, Any] = {}
     if "num_stocks" in args_dict:
         data_overrides["num_stocks"] = args_dict["num_stocks"]
     if data_overrides:
         resolved_data_config = replace(resolved_data_config, **data_overrides)
-    return resolved_data_config
+    return validated_data_config(resolved_data_config)
 
 
 def resolve_model_config_from_args(
@@ -298,7 +307,7 @@ def resolve_model_config_from_args(
     *,
     model_config: ModelConfig | None = None,
 ) -> ModelConfig:
-    resolved_model_config = model_config or ModelConfig()
+    resolved_model_config = validated_model_config(model_config or ModelConfig())
     args_dict = vars(args)
     model_overrides: dict[str, Any] = {}
     if "stock_id_representation_type" in args_dict:
@@ -317,7 +326,7 @@ def resolve_model_config_from_args(
         ]
     if model_overrides:
         resolved_model_config = replace(resolved_model_config, **model_overrides)
-    return resolved_model_config
+    return validated_model_config(resolved_model_config)
 
 
 def main() -> None:

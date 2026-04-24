@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 import signal
 from typing import Any
 
@@ -91,6 +92,37 @@ class GracefulInterruptController:
 
 
 _INTERRUPT_CONTROLLER = GracefulInterruptController()
+_LEGACY_STOCK_FFN_MISSING_KEYS = frozenset(
+    {
+        "model.stock_ffn.0.weight",
+        "model.stock_ffn.0.bias",
+        "model.stock_ffn.3.weight",
+        "model.stock_ffn.3.bias",
+    }
+)
+
+
+def _extract_missing_state_dict_keys_from_error(error_text: str) -> set[str]:
+    match = re.search(
+        r"Missing key\(s\) in state_dict:\s*(.*?)(?:\n\s*Unexpected key\(s\) in state_dict:|\n\s*size mismatch for|\Z)",
+        error_text,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        return set()
+    return {value.strip() for value in re.findall(r'"([^"]+)"', match.group(1))}
+
+
+def _is_legacy_stock_ffn_only_missing_error(error: Exception) -> bool:
+    message = str(error)
+    if "Missing key(s) in state_dict" not in message:
+        return False
+    if "Unexpected key(s) in state_dict" in message:
+        return False
+    if "size mismatch for" in message:
+        return False
+    missing_keys = _extract_missing_state_dict_keys_from_error(message)
+    return missing_keys == _LEGACY_STOCK_FFN_MISSING_KEYS
 
 
 def _destroy_distributed_process_group_if_initialized() -> None:
@@ -189,22 +221,48 @@ def run_post_training_holdout(
             )
 
         _emit_holdout_console_message(f"Running holdout monitoring for epoch {int(epoch)}.")
+        load_kwargs = dict(
+            map_location=device,
+            data_config=data_config,
+            model_config=model_config,
+            train_config=train_config,
+            dataset=resolved_datamodule.dataset,
+            stock_count_weight_threshold=float(evaluation_config.stock_count_weight_threshold),
+            stock_count_min_active_days=int(evaluation_config.stock_count_min_active_days),
+        )
         try:
             lightning_module = PortfolioLightningModule.load_from_checkpoint(
                 str(checkpoint_path),
-                map_location=device,
-                data_config=data_config,
-                model_config=model_config,
-                train_config=train_config,
-                dataset=resolved_datamodule.dataset,
-                stock_count_weight_threshold=float(evaluation_config.stock_count_weight_threshold),
-                stock_count_min_active_days=int(evaluation_config.stock_count_min_active_days),
+                **load_kwargs,
             )
         except Exception as exc:
-            raise RuntimeError(
-                f"Failed to load Lightning checkpoint for epoch {int(epoch)} at {checkpoint_path}. "
-                f"Original error: {exc}"
-            ) from exc
+            if _is_legacy_stock_ffn_only_missing_error(exc):
+                _emit_holdout_console_message(
+                    "Detected legacy checkpoint without model.stock_ffn weights; retrying with strict=False."
+                )
+                try:
+                    lightning_module = PortfolioLightningModule.load_from_checkpoint(
+                        str(checkpoint_path),
+                        strict=False,
+                        **load_kwargs,
+                    )
+                    if hasattr(lightning_module, "model") and hasattr(
+                        lightning_module.model, "enable_legacy_stock_ffn_noop_for_inference"
+                    ):
+                        lightning_module.model.enable_legacy_stock_ffn_noop_for_inference()
+                        _emit_holdout_console_message(
+                            "Enabled legacy inference compatibility: treating stock_ffn as no-op."
+                        )
+                except Exception as fallback_exc:
+                    raise RuntimeError(
+                        f"Failed to load Lightning checkpoint for epoch {int(epoch)} at {checkpoint_path}. "
+                        f"Original error: {fallback_exc}"
+                    ) from fallback_exc
+            else:
+                raise RuntimeError(
+                    f"Failed to load Lightning checkpoint for epoch {int(epoch)} at {checkpoint_path}. "
+                    f"Original error: {exc}"
+                ) from exc
 
         lightning_module.to(device)
         lightning_module.eval()

@@ -652,7 +652,7 @@ def build_chart_metrics_text(
     portfolio_sr: float,
     benchmark_excess_return: float | None = None,
     benchmark_information_ratio: float | None = None,
-    benchmark_excess_max_drawdown: float | None = None,
+    average_turnover: float | None = None,
     selected_stock_count: int | None = None,
     stock_count_weight_threshold: float | None = None,
 ) -> str:
@@ -662,7 +662,7 @@ def build_chart_metrics_text(
         portfolio_sr=portfolio_sr,
         benchmark_excess_return=benchmark_excess_return,
         benchmark_information_ratio=benchmark_information_ratio,
-        benchmark_excess_max_drawdown=benchmark_excess_max_drawdown,
+        average_turnover=average_turnover,
         selected_stock_count=selected_stock_count,
         stock_count_weight_threshold=stock_count_weight_threshold,
     )

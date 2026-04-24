@@ -16,6 +16,11 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from portfolio_attention import artifact_paths, run_metadata
     from portfolio_attention.config import DataConfig, ModelConfig, PathsConfig, TrainConfig
+    from portfolio_attention.config_validation import (
+        validated_data_config,
+        validated_model_config,
+        validated_train_config,
+    )
     from portfolio_attention.dataset import PortfolioPanelDataset
     from portfolio_attention.train_engine import (
         _append_dataset_split_summary,
@@ -52,6 +57,11 @@ if __package__ is None or __package__ == "":
 else:
     from . import artifact_paths, run_metadata
     from .config import DataConfig, ModelConfig, PathsConfig, TrainConfig
+    from .config_validation import (
+        validated_data_config,
+        validated_model_config,
+        validated_train_config,
+    )
     from .dataset import PortfolioPanelDataset
     from .train_engine import (
         _append_dataset_split_summary,
@@ -253,6 +263,8 @@ def _run_epoch_training_with_datasets(
                 train_loader=train_loader,
                 device=device,
                 loss_name=train_config.loss_name,
+                turnover_penalty=train_config.turnover_penalty,
+                transaction_cost_rate=train_config.transaction_cost_rate,
                 grad_clip_norm=train_config.grad_clip_norm,
                 epoch=epoch,
                 num_epochs=train_config.num_epochs,
@@ -479,6 +491,9 @@ def run_epoch_training(
     train_config: TrainConfig,
     paths: PathsConfig,
 ) -> dict[str, Any]:
+    data_config = validated_data_config(data_config)
+    model_config = validated_model_config(model_config)
+    train_config = validated_train_config(train_config)
     ensure_output_dirs(paths)
     save_runtime_config_artifact(
         paths=paths,

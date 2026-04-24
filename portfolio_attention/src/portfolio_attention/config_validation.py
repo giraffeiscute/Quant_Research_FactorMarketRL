@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .config_paths import default_scenario_dir
 
@@ -19,6 +20,78 @@ LEGACY_LOOKBACK_MODES = frozenset({"full_history", "bounded"})
 
 def normalize_lookback_mode(value: object) -> str:
     return str(value).strip().lower()
+
+
+def normalize_model_config_dict(config_dict: dict[str, Any]) -> dict[str, Any]:
+    """Backfill model-config fields that were previously implicit.
+
+    Older checkpoints stored a single `cross_sectional_dim` that also acted as
+    the stock temporal hidden dimension. The current architecture splits that
+    into `stock_temporal_dim` and `cross_sectional_dim`, so we infer the former
+    from the legacy field when it is missing. Older checkpoints also predate
+    explicit stock-id representation and placement selection, so they
+    implicitly use learnable stock-id lookups with post-temporal concat.
+    """
+
+    normalized = dict(config_dict)
+    if "stock_temporal_dim" not in normalized and "cross_sectional_dim" in normalized:
+        normalized["stock_temporal_dim"] = normalized["cross_sectional_dim"]
+    if "stock_id_representation_type" not in normalized:
+        normalized["stock_id_representation_type"] = "learning"
+    if "stock_embedding_type" not in normalized:
+        normalized["stock_embedding_type"] = "concat"
+    if normalized.get("time_positional_encoding_type") == "running_mean":
+        normalized["time_positional_encoding_type"] = "none"
+    if "allocation_smoothing_alpha" not in normalized:
+        normalized["allocation_smoothing_alpha"] = 1.0
+    if "initial_allocation_mode" not in normalized:
+        normalized["initial_allocation_mode"] = "equal_weight"
+    if "initial_random_concentration" not in normalized:
+        normalized["initial_random_concentration"] = 1.0
+    return normalized
+
+
+def raise_if_checkpoint_uses_legacy_stock_id_representation_type(
+    checkpoint_model_config: dict[str, Any],
+    *,
+    context: str,
+) -> None:
+    raw_value = checkpoint_model_config.get("stock_id_representation_type")
+    if raw_value is None:
+        return
+
+    normalized_value = str(raw_value).strip().lower()
+    if normalized_value in {"embedding", "one_hot"}:
+        raise ValueError(
+            f"{context} uses unsupported legacy stock_id_representation_type="
+            f"{normalized_value!r}. Supported values are ['gaussian', 'learning']. "
+            "Only checkpoints missing stock_id_representation_type can be backfilled to "
+            "'learning'."
+        )
+
+
+def validated_data_config(config: DataConfig) -> DataConfig:
+    resolved = replace(config)
+    validate_data_config(resolved)
+    return resolved
+
+
+def validated_model_config(config: ModelConfig) -> ModelConfig:
+    resolved = replace(config)
+    validate_model_config(resolved)
+    return resolved
+
+
+def validated_train_config(config: TrainConfig) -> TrainConfig:
+    resolved = replace(config)
+    validate_train_config(resolved)
+    return resolved
+
+
+def validated_evaluation_config(config: EvaluationConfig) -> EvaluationConfig:
+    resolved = replace(config)
+    validate_evaluation_config(resolved)
+    return resolved
 
 
 def validate_data_config(config: DataConfig) -> None:
@@ -186,6 +259,29 @@ def validate_model_config(config: ModelConfig) -> None:
             f"received {config.time_positional_encoding_type!r}."
         )
 
+    config.allocation_smoothing_alpha = float(config.allocation_smoothing_alpha)
+    if not 0.0 <= config.allocation_smoothing_alpha <= 1.0:
+        raise ValueError(
+            "ModelConfig.allocation_smoothing_alpha must be in [0.0, 1.0], "
+            f"received {config.allocation_smoothing_alpha}."
+        )
+
+    config.initial_allocation_mode = str(config.initial_allocation_mode).strip().lower()
+    valid_initial_allocation_modes = {"equal_weight", "random_dirichlet"}
+    if config.initial_allocation_mode not in valid_initial_allocation_modes:
+        raise ValueError(
+            "ModelConfig.initial_allocation_mode must be one of "
+            f"{sorted(valid_initial_allocation_modes)}, "
+            f"received {config.initial_allocation_mode!r}."
+        )
+
+    config.initial_random_concentration = float(config.initial_random_concentration)
+    if config.initial_random_concentration <= 0.0:
+        raise ValueError(
+            "ModelConfig.initial_random_concentration must be > 0.0, "
+            f"received {config.initial_random_concentration}."
+        )
+
 
 def validate_train_config(config: TrainConfig) -> None:
     config.holdout_backtest_interval_epochs = int(config.holdout_backtest_interval_epochs)
@@ -199,6 +295,20 @@ def validate_train_config(config: TrainConfig) -> None:
         raise ValueError(
             "TrainConfig.enable_fixed_epoch_holdout_backtests must be a bool, "
             f"received {config.enable_fixed_epoch_holdout_backtests!r}."
+        )
+
+    config.turnover_penalty = float(config.turnover_penalty)
+    if config.turnover_penalty < 0.0:
+        raise ValueError(
+            "TrainConfig.turnover_penalty must be non-negative, "
+            f"received {config.turnover_penalty}."
+        )
+
+    config.transaction_cost_rate = float(config.transaction_cost_rate)
+    if config.transaction_cost_rate < 0.0:
+        raise ValueError(
+            "TrainConfig.transaction_cost_rate must be non-negative, "
+            f"received {config.transaction_cost_rate}."
         )
 
     if config.resume_from is not None:

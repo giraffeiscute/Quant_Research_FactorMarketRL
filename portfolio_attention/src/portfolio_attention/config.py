@@ -4,58 +4,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from . import artifact_paths, config_paths
 from .config_paths import default_scenario_dir, project_root
-from .config_validation import (
-    validate_data_config,
-    validate_evaluation_config,
-    validate_model_config,
-    validate_train_config,
-)
-
-
-def normalize_model_config_dict(config_dict: dict[str, Any]) -> dict[str, Any]:
-    """Backfill model-config fields that were previously implicit.
-
-    Older checkpoints stored a single `cross_sectional_dim` that also acted as
-    the stock temporal hidden dimension. The current architecture splits that
-    into `stock_temporal_dim` and `cross_sectional_dim`, so we infer the former
-    from the legacy field when it is missing. Older checkpoints also predate
-    explicit stock-id representation and placement selection, so they
-    implicitly use learnable stock-id lookups with post-temporal concat.
-    """
-
-    normalized = dict(config_dict)
-    if "stock_temporal_dim" not in normalized and "cross_sectional_dim" in normalized:
-        normalized["stock_temporal_dim"] = normalized["cross_sectional_dim"]
-    if "stock_id_representation_type" not in normalized:
-        normalized["stock_id_representation_type"] = "learning"
-    if "stock_embedding_type" not in normalized:
-        normalized["stock_embedding_type"] = "concat"
-    if normalized.get("time_positional_encoding_type") == "running_mean":
-        normalized["time_positional_encoding_type"] = "none"
-    return normalized
-
-
-def raise_if_checkpoint_uses_legacy_stock_id_representation_type(
-    checkpoint_model_config: dict[str, Any],
-    *,
-    context: str,
-) -> None:
-    raw_value = checkpoint_model_config.get("stock_id_representation_type")
-    if raw_value is None:
-        return
-
-    normalized_value = str(raw_value).strip().lower()
-    if normalized_value in {"embedding", "one_hot"}:
-        raise ValueError(
-            f"{context} uses unsupported legacy stock_id_representation_type="
-            f"{normalized_value!r}. Supported values are ['gaussian', 'learning']. "
-            "Only checkpoints missing stock_id_representation_type can be backfilled to "
-            "'learning'."
-        )
 
 
 @dataclass
@@ -140,11 +92,10 @@ class DataConfig:
     # Fixed or maximum stock universe size to keep from each scenario.
     num_stocks: int = 4860
 
-    def __post_init__(self) -> None:
-        validate_data_config(self)
-
     @property
     def resolved_scenario_dir(self) -> Path:
+        if self.scenario_dir is None:
+            return default_scenario_dir(str(self.state))
         return Path(self.scenario_dir)
 
     @property
@@ -179,10 +130,10 @@ class ModelConfig:
     stock_temporal_encoder_type: Literal["running_summary", "causal_self_attention"] = "causal_self_attention"
     stock_cross_sectional_encoder_type: Literal["mlp", "self_attention"] = "self_attention"
     time_positional_encoding_type: Literal["none", "sinusoidal"] = "sinusoidal"
-    dropout: float = 0.0
-
-    def __post_init__(self) -> None:
-        validate_model_config(self)
+    allocation_smoothing_alpha: float = 1.0
+    initial_allocation_mode: str = "equal_weight"
+    initial_random_concentration: float = 1.0
+    dropout: float = 0.1
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -201,12 +152,11 @@ class TrainConfig:
     select_best_from_last_x_epochs: int = 1
     holdout_backtest_interval_epochs: int = 1
     enable_fixed_epoch_holdout_backtests: bool = False
+    turnover_penalty: float = 0.0
+    transaction_cost_rate: float = 0.001
     loss_name: str = ""
     device: str = "auto"
     resume_from: Path | None = None
-    def __post_init__(self) -> None:
-        validate_train_config(self)
-
     def _checkpoint_name(self, stem: str, state: str | None = None) -> str:
         prefix = f"{state}_" if state else ""
         if self.loss_name:
@@ -235,6 +185,3 @@ class EvaluationConfig:
     allocation_group_top_n: int = 7
     stock_count_weight_threshold: float = 0.001
     stock_count_min_active_days: int = 2
-
-    def __post_init__(self) -> None:
-        validate_evaluation_config(self)

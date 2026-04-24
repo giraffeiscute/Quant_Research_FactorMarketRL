@@ -31,6 +31,26 @@ def _terminal_return_per_scenario(
     return torch.sum(portfolio_returns, dim=1)
 
 
+def _coerce_turnover(turnover: torch.Tensor | None, *, reference: torch.Tensor) -> torch.Tensor | None:
+    if turnover is None:
+        return None
+    if turnover.numel() == 0:
+        raise ValueError("turnover must not be empty when provided.")
+    if turnover.ndim == 1:
+        turnover = turnover.unsqueeze(0)
+    if turnover.ndim != 2:
+        raise ValueError(
+            "turnover must have shape [num_scenarios_in_batch, time_steps]. "
+            f"Received {tuple(turnover.shape)}."
+        )
+    if tuple(turnover.shape) != tuple(reference.shape):
+        raise ValueError(
+            "turnover must match portfolio_returns shape. "
+            f"Received turnover={tuple(turnover.shape)} portfolio_returns={tuple(reference.shape)}."
+        )
+    return turnover
+
+
 # 計算投資組合整段路徑的最終報酬損失，回傳負值供最小化。
 def return_loss(
     portfolio_returns: torch.Tensor,
@@ -214,3 +234,30 @@ def build_loss(
         return cvar_loss(portfolio_returns, **kwargs)  # CVaR
 
     raise ValueError(f"Unsupported loss: {name}")  # 不支援的 loss 名稱直接報錯
+
+
+def build_portfolio_objective_loss(
+    name: str,
+    portfolio_returns: torch.Tensor,
+    turnover: torch.Tensor | None = None,
+    turnover_penalty: float = 0.0,
+    transaction_cost_rate: float = 0.0,
+    **kwargs,
+) -> torch.Tensor:
+    scored_returns = _coerce_portfolio_returns(portfolio_returns)
+    scored_turnover = _coerce_turnover(turnover, reference=scored_returns)
+    resolved_turnover_penalty = float(turnover_penalty)
+    resolved_transaction_cost_rate = float(transaction_cost_rate)
+
+    objective_returns = scored_returns
+    if resolved_transaction_cost_rate > 0.0:
+        if scored_turnover is None:
+            raise ValueError("turnover is required when transaction_cost_rate > 0.")
+        objective_returns = scored_returns - resolved_transaction_cost_rate * scored_turnover
+
+    loss = build_loss(name, objective_returns, **kwargs)
+    if resolved_turnover_penalty > 0.0:
+        if scored_turnover is None:
+            raise ValueError("turnover is required when turnover_penalty > 0.")
+        loss = loss + resolved_turnover_penalty * scored_turnover.mean()
+    return loss

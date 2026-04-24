@@ -52,6 +52,24 @@ class PortfolioAttentionModel(nn.Module):
         self.max_lookback = max_lookback
         self.stock_temporal_encoder_type = config.stock_temporal_encoder_type
         self.stock_cross_sectional_encoder_type = config.stock_cross_sectional_encoder_type
+        self.allocation_smoothing_alpha = float(config.allocation_smoothing_alpha)
+        self.initial_allocation_mode = str(config.initial_allocation_mode).strip().lower()
+        self.initial_random_concentration = float(config.initial_random_concentration)
+        if self.initial_allocation_mode not in {"equal_weight", "random_dirichlet"}:
+            raise ValueError(
+                "initial_allocation_mode must be one of {'equal_weight', 'random_dirichlet'}, "
+                f"received {self.initial_allocation_mode!r}."
+            )
+        if not 0.0 <= self.allocation_smoothing_alpha <= 1.0:
+            raise ValueError(
+                "allocation_smoothing_alpha must be in [0.0, 1.0], "
+                f"received {self.allocation_smoothing_alpha}."
+            )
+        if self.initial_random_concentration <= 0.0:
+            raise ValueError(
+                "initial_random_concentration must be > 0.0, "
+                f"received {self.initial_random_concentration}."
+            )
         self.stock_temporal_attention_window = (
             max_lookback
             if stock_temporal_attention_window is None
@@ -76,6 +94,7 @@ class PortfolioAttentionModel(nn.Module):
             nn.Dropout(config.dropout),
             nn.Linear(config.stock_temporal_dim, config.stock_temporal_dim),
         )
+        self._legacy_stock_ffn_noop_for_inference = False
 
         self.market_input_proj = nn.Linear(
             config.market_feature_dim, config.market_temporal_dim
@@ -136,6 +155,9 @@ class PortfolioAttentionModel(nn.Module):
         self.stock_cross_ffn = None
         self.stock_cross_attention_score = None
         self.cash_cross_attention_score = None
+        self.cash_state_mlp_base = None
+        self.stock_prev_weight_mlp = None
+        self.cash_prev_weight_mlp = None
         self.stock_score = None
         self.cash_score = None
 
@@ -165,6 +187,24 @@ class PortfolioAttentionModel(nn.Module):
 
             self.stock_cross_attention_score = nn.Linear(self.stock_attention_dim, 1)
             self.cash_cross_attention_score = nn.Linear(self.stock_attention_dim, 1)
+            self.cash_state_mlp_base = nn.Sequential(
+                nn.Linear(self.stock_attention_dim, self.stock_attention_dim),
+                nn.GELU(),
+                nn.Dropout(config.dropout),
+                nn.Linear(self.stock_attention_dim, self.stock_attention_dim),
+            )
+            self.stock_prev_weight_mlp = nn.Sequential(
+                nn.Linear(self.stock_attention_dim + 1, self.stock_attention_dim),
+                nn.GELU(),
+                nn.Dropout(config.dropout),
+                nn.Linear(self.stock_attention_dim, self.stock_attention_dim),
+            )
+            self.cash_prev_weight_mlp = nn.Sequential(
+                nn.Linear(self.stock_attention_dim + 1, self.stock_attention_dim),
+                nn.GELU(),
+                nn.Dropout(config.dropout),
+                nn.Linear(self.stock_attention_dim, self.stock_attention_dim),
+            )
         elif self.stock_cross_sectional_encoder_type == "mlp":
             stock_feature_width = (
                 config.stock_temporal_dim * 2
@@ -324,7 +364,8 @@ class PortfolioAttentionModel(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
         if stock_sequence.ndim != 4:
             raise ValueError("stock_sequence must have shape [S, T, N, D_stock].")
-        stock_sequence = self.stock_ffn(stock_sequence)
+        if not self._legacy_stock_ffn_noop_for_inference:
+            stock_sequence = self.stock_ffn(stock_sequence)
         if self.stock_temporal_encoder_type == "running_summary":
             stock_summary = self._causal_running_mean(stock_sequence)
             return (
@@ -401,6 +442,85 @@ class PortfolioAttentionModel(nn.Module):
             },
         )
 
+    def enable_legacy_stock_ffn_noop_for_inference(self) -> None:
+        self._legacy_stock_ffn_noop_for_inference = True
+
+    def _initial_allocation(
+        self,
+        *,
+        num_scenarios: int,
+        num_stocks: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if self.initial_allocation_mode == "equal_weight":
+            return torch.full(
+                (num_scenarios, num_stocks + 1),
+                1.0 / (num_stocks + 1),
+                device=device,
+                dtype=dtype,
+            )
+
+        if self.initial_allocation_mode == "random_dirichlet":
+            concentration = torch.full(
+                (num_stocks + 1,),
+                self.initial_random_concentration,
+                device=device,
+                dtype=dtype,
+            )
+            return torch.distributions.Dirichlet(concentration).sample((num_scenarios,))
+
+        raise ValueError(f"Unsupported initial_allocation_mode: {self.initial_allocation_mode!r}")
+
+    def _smooth_allocation_from_logits(
+        self,
+        *,
+        allocation_logits: torch.Tensor,
+        num_stocks: int,
+        initial_allocation: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if allocation_logits.ndim != 3:
+            raise ValueError("allocation_logits must have shape [S, T, N+1].")
+        num_scenarios, time_steps, total_assets = allocation_logits.shape
+        expected_assets = num_stocks + 1
+        if total_assets != expected_assets:
+            raise ValueError(
+                f"allocation_logits last dimension must equal {expected_assets}, received {total_assets}."
+            )
+        if initial_allocation is None:
+            prev_weight = self._initial_allocation(
+                num_scenarios=num_scenarios,
+                num_stocks=num_stocks,
+                device=allocation_logits.device,
+                dtype=allocation_logits.dtype,
+            )
+        else:
+            prev_weight = initial_allocation
+            if prev_weight.shape != (num_scenarios, expected_assets):
+                raise ValueError(
+                    "initial_allocation must have shape [S, N+1]. "
+                    f"Received {tuple(prev_weight.shape)} expected {(num_scenarios, expected_assets)}."
+                )
+        alpha = float(self.allocation_smoothing_alpha)
+        raw_allocations: list[torch.Tensor] = []
+        allocations: list[torch.Tensor] = []
+        turnovers: list[torch.Tensor] = []
+        for time_index in range(time_steps):
+            logits_t = allocation_logits[:, time_index, :]
+            raw_t = torch.softmax(logits_t, dim=-1)
+            allocation_t = alpha * raw_t + (1.0 - alpha) * prev_weight
+            turnover_t = 0.5 * torch.abs(allocation_t - prev_weight).sum(dim=-1)
+            raw_allocations.append(raw_t)
+            allocations.append(allocation_t)
+            turnovers.append(turnover_t)
+            prev_weight = allocation_t
+
+        return (
+            torch.stack(raw_allocations, dim=1),
+            torch.stack(allocations, dim=1),
+            torch.stack(turnovers, dim=1),
+        )
+
     def _score_stock_allocation(
         self,
         *,
@@ -409,6 +529,7 @@ class PortfolioAttentionModel(nn.Module):
         market_current: torch.Tensor,
         market_summary: torch.Tensor,
         stock_identity: torch.Tensor | None,
+        initial_allocation: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
         num_scenarios, time_steps, num_stocks, _ = stock_temporal_current.shape
         market_current_expanded = market_current.unsqueeze(2).expand(-1, -1, num_stocks, -1)
@@ -463,6 +584,9 @@ class PortfolioAttentionModel(nn.Module):
             or self.stock_cross_ffn is None
             or self.stock_cross_attention_score is None
             or self.cash_cross_attention_score is None
+            or self.cash_state_mlp_base is None
+            or self.stock_prev_weight_mlp is None
+            or self.cash_prev_weight_mlp is None
         ):
             raise RuntimeError("Self-attention cross-sectional scorer modules must be initialized.")
 
@@ -513,9 +637,45 @@ class PortfolioAttentionModel(nn.Module):
             num_stocks,
             self.stock_attention_dim,
         )
+        if initial_allocation is None:
+            prev_weight = self._initial_allocation(
+                num_scenarios=num_scenarios,
+                num_stocks=num_stocks,
+                device=attended_stock.device,
+                dtype=attended_stock.dtype,
+            )
+        else:
+            prev_weight = initial_allocation
+            if prev_weight.shape != (num_scenarios, num_stocks + 1):
+                raise ValueError(
+                    "initial_allocation must have shape [S, N+1]. "
+                    f"Received {tuple(prev_weight.shape)} expected {(num_scenarios, num_stocks + 1)}."
+                )
+        alpha = float(self.allocation_smoothing_alpha)
+        stock_logits_by_step: list[torch.Tensor] = []
+        cash_logit_by_step: list[torch.Tensor] = []
+        for time_index in range(time_steps):
+            attended_stock_t = attended_stock[:, time_index, :, :]
+            stock_state_input = torch.cat(
+                [attended_stock_t, prev_weight[:, :num_stocks].unsqueeze(-1)],
+                dim=-1,
+            )
+            stock_state_repr = self.stock_prev_weight_mlp(stock_state_input)
+            stock_logit_t = self.stock_cross_attention_score(stock_state_repr).squeeze(-1)
+            cash_base_input = attended_stock_t.mean(dim=1)
+            cash_state_base = self.cash_state_mlp_base(cash_base_input)
+            cash_state_input = torch.cat([cash_state_base, prev_weight[:, -1:].contiguous()], dim=-1)
+            cash_state_repr = self.cash_prev_weight_mlp(cash_state_input)
+            cash_logit_t = self.cash_cross_attention_score(cash_state_repr).squeeze(-1)
 
-        stock_logits = self.stock_cross_attention_score(attended_stock).squeeze(-1)
-        cash_logit = self.cash_cross_attention_score(attended_stock.mean(dim=2)).squeeze(-1)
+            allocation_logits_t = torch.cat([stock_logit_t, cash_logit_t.unsqueeze(-1)], dim=-1)
+            raw_t = torch.softmax(allocation_logits_t, dim=-1)
+            prev_weight = alpha * raw_t + (1.0 - alpha) * prev_weight
+
+            stock_logits_by_step.append(stock_logit_t)
+            cash_logit_by_step.append(cash_logit_t)
+        stock_logits = torch.stack(stock_logits_by_step, dim=1)
+        cash_logit = torch.stack(cash_logit_by_step, dim=1)
         return (
             stock_logits,
             cash_logit,
@@ -587,6 +747,12 @@ class PortfolioAttentionModel(nn.Module):
             self._encode_stock_sequence(stock_current)
         )
         market_current, market_summary = self._encode_market_sequence(market_current)
+        initial_allocation = self._initial_allocation(
+            num_scenarios=num_scenarios,
+            num_stocks=num_stocks,
+            device=stock_temporal_current.device,
+            dtype=stock_temporal_current.dtype,
+        )
 
         stock_logits, cash_logit, stock_debug_info = self._score_stock_allocation(
             stock_temporal_current=stock_temporal_current,
@@ -594,10 +760,15 @@ class PortfolioAttentionModel(nn.Module):
             market_current=market_current,
             market_summary=market_summary,
             stock_identity=stock_identity_for_scoring,
+            initial_allocation=initial_allocation,
         )
 
         allocation_logits = torch.cat([stock_logits, cash_logit.unsqueeze(-1)], dim=-1)
-        allocation = torch.softmax(allocation_logits, dim=-1)
+        raw_allocation, allocation, turnover = self._smooth_allocation_from_logits(
+            allocation_logits=allocation_logits,
+            num_stocks=num_stocks,
+            initial_allocation=initial_allocation,
+        )
         stock_weights = allocation[..., :-1]
         cash_weight = allocation[..., -1]
 
@@ -618,6 +789,9 @@ class PortfolioAttentionModel(nn.Module):
             "stock_temporal_encoder_type": self.stock_temporal_encoder_type,
             "stock_cross_sectional_encoder_type": self.stock_cross_sectional_encoder_type,
             "stock_temporal_attention_window": self.stock_temporal_attention_window,
+            "allocation_smoothing_alpha": self.allocation_smoothing_alpha,
+            "initial_allocation_mode": self.initial_allocation_mode,
+            "initial_random_concentration": self.initial_random_concentration,
             "stock_current_shape": tuple(stock_current.shape),
             "stock_temporal_current_shape": tuple(stock_temporal_current.shape),
             "stock_running_shape": tuple(stock_temporal_summary.shape),
@@ -633,6 +807,10 @@ class PortfolioAttentionModel(nn.Module):
             "cash_weight": cash_weight,
             "stock_logits": stock_logits,
             "cash_logit": cash_logit,
+            "allocation_logits": allocation_logits,
+            "raw_allocation": raw_allocation,
+            "allocation": allocation,
+            "turnover": turnover,
             "portfolio_return": portfolio_return,
             "debug_info": debug_info,
         }

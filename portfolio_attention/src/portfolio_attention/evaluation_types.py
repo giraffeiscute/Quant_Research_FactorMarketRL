@@ -50,7 +50,7 @@ class ScenarioExportArtifact(TypedDict):
     benchmark_market_index_csv: NotRequired[str | None]
     benchmark_excess_return: NotRequired[float | None]
     benchmark_information_ratio: NotRequired[float | None]
-    benchmark_excess_max_drawdown: NotRequired[float | None]
+    average_turnover: NotRequired[float]
 
 
 class MonitoringScenarioArtifact(TypedDict):
@@ -65,7 +65,7 @@ class MonitoringScenarioArtifact(TypedDict):
     benchmark_market_index_csv: NotRequired[str | None]
     benchmark_excess_return: NotRequired[float | None]
     benchmark_information_ratio: NotRequired[float | None]
-    benchmark_excess_max_drawdown: NotRequired[float | None]
+    average_turnover: NotRequired[float]
     evaluation_mode: NotRequired[str | None]
     rolling_window_lookback_days: NotRequired[int | None]
     rolling_window_horizon_days: NotRequired[int | None]
@@ -81,6 +81,7 @@ class HoldoutSummary(TypedDict):
     evaluation_split: str
     num_holdout_scenarios: int
     mean_final_return: float
+    mean_average_turnover: float
     std_final_return: float
     median_final_return: float
     worst_scenario_final_return: float
@@ -139,6 +140,7 @@ class ScenarioReturnStats:
     backtest_portfolio_sr: float
     mean_step_return: float
     std_step_return: float
+    average_turnover: float
     sharpe_like: float | None = None
 
 
@@ -163,7 +165,6 @@ class BenchmarkMetrics:
     benchmark_market_index_csv: str | None
     benchmark_excess_return: float | None
     benchmark_information_ratio: float | None
-    benchmark_excess_max_drawdown: float | None
 
 
 @dataclass
@@ -203,6 +204,7 @@ class RuntimePayloadAdapter:
         "backtest_portfolio_sr",
         "mean_step_return",
         "std_step_return",
+        "average_turnover",
         "final_cash_weight",
         "mean_cash_weight",
         "num_time_steps",
@@ -232,7 +234,6 @@ class RuntimePayloadAdapter:
         "benchmark_market_index_csv",
         "benchmark_excess_return",
         "benchmark_information_ratio",
-        "benchmark_excess_max_drawdown",
         "evaluation_mode",
         "rolling_window_lookback_days",
         "rolling_window_horizon_days",
@@ -240,6 +241,8 @@ class RuntimePayloadAdapter:
         "num_rolling_windows",
         "evaluation_price_anchor_mode",
         "sharpe_like",
+        # Legacy artifact field that is intentionally ignored in new outputs.
+        "benchmark_excess_max_drawdown",
         *TRANSIENT_SCENARIO_TENSOR_FIELDS,
     }
 
@@ -357,6 +360,7 @@ class RuntimePayloadAdapter:
             backtest_portfolio_sr=cls._to_float(payload.get("backtest_portfolio_sr")),
             mean_step_return=cls._to_float(payload.get("mean_step_return")),
             std_step_return=cls._to_float(payload.get("std_step_return")),
+            average_turnover=cls._to_float(payload.get("average_turnover")),
             sharpe_like=cls._to_optional_float(payload.get("sharpe_like")),
         )
         cash_stats = ScenarioCashStats(
@@ -379,9 +383,6 @@ class RuntimePayloadAdapter:
             else None,
             benchmark_excess_return=cls._to_optional_float(payload.get("benchmark_excess_return")),
             benchmark_information_ratio=cls._to_optional_float(payload.get("benchmark_information_ratio")),
-            benchmark_excess_max_drawdown=cls._to_optional_float(
-                payload.get("benchmark_excess_max_drawdown")
-            ),
         )
         raw_train_config = payload.get("train_config")
         train_config = dict(raw_train_config) if isinstance(raw_train_config, dict) else {}
@@ -423,6 +424,7 @@ class RuntimePayloadAdapter:
                 "backtest_portfolio_sr": float(result.return_stats.backtest_portfolio_sr),
                 "mean_step_return": float(result.return_stats.mean_step_return),
                 "std_step_return": float(result.return_stats.std_step_return),
+                "average_turnover": float(result.return_stats.average_turnover),
                 "final_cash_weight": float(result.cash_stats.final_cash_weight),
                 "mean_cash_weight": float(result.cash_stats.mean_cash_weight),
                 "num_time_steps": int(result.window_meta.num_time_steps),
@@ -456,7 +458,6 @@ class RuntimePayloadAdapter:
                 "benchmark_market_index_csv": result.benchmark_metrics.benchmark_market_index_csv,
                 "benchmark_excess_return": result.benchmark_metrics.benchmark_excess_return,
                 "benchmark_information_ratio": result.benchmark_metrics.benchmark_information_ratio,
-                "benchmark_excess_max_drawdown": result.benchmark_metrics.benchmark_excess_max_drawdown,
             }
         )
         if result.window_meta.evaluation_mode is not None:
@@ -486,4 +487,3 @@ class RuntimePayloadAdapter:
         for item in per_scenario_payloads:
             for field_name in TRANSIENT_SCENARIO_TENSOR_FIELDS:
                 item.pop(field_name, None)
-

@@ -248,6 +248,7 @@ def _collect_single_scenario_rolling_one_step_outputs(
     payload: dict[str, Any] = {
         "scenario_id": scenario_id,
         "source_path": source_path,
+        # TODO(phase-2): include turnover series so validation/evaluation can compute net returns.
         "portfolio_returns": torch.stack(portfolio_returns_by_day, dim=0),
         "scored_target_time_indices": scored_target_time_indices,
         "context_target_time_indices": context_target_time_indices,

@@ -20,7 +20,7 @@ from .evaluation_runtime import (
     ROLLING_ONE_STEP_STRIDE_DAYS,
     _collect_single_scenario_rolling_one_step_outputs,
 )
-from .losses import build_loss
+from .losses import build_loss, build_portfolio_objective_loss
 from .model import PortfolioAttentionModel
 from .train_resume import advance_train_loader_generator, load_resume_training_state
 from .train_status import TrainingStatusReporter, build_dataset_progress_callback
@@ -160,6 +160,9 @@ def _run_loss_step(
     model: PortfolioAttentionModel,
     batch: dict[str, Any],
     loss_name: str,
+    *,
+    turnover_penalty: float = 0.0,
+    transaction_cost_rate: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
     outputs = model(
         batch["x_stock"],
@@ -175,21 +178,40 @@ def _run_loss_step(
             "portfolio_returns must have shape [num_scenarios_in_batch, time_steps]. "
             f"Received {tuple(portfolio_returns.shape)}."
         )
+    turnover = outputs.get("turnover")
+    if not isinstance(turnover, torch.Tensor):
+        raise RuntimeError("Training batch requires model outputs to include turnover tensor.")
+    if turnover.shape != portfolio_returns.shape:
+        raise ValueError(
+            "turnover must match portfolio_returns shape. "
+            f"Received turnover={tuple(turnover.shape)} portfolio_returns={tuple(portfolio_returns.shape)}."
+        )
     score_mask = batch.get("score_mask")
     if score_mask is None:
         scored_returns = portfolio_returns
+        scored_turnover = turnover
     else:
         if not isinstance(score_mask, torch.Tensor):
             raise ValueError("score_mask must be a tensor when provided in the batch.")
-        scored_returns = apply_score_mask(portfolio_returns, score_mask.to(dtype=torch.bool))
+        score_mask_bool = score_mask.to(dtype=torch.bool)
+        scored_returns = apply_score_mask(portfolio_returns, score_mask_bool)
+        scored_turnover = apply_score_mask(turnover, score_mask_bool)
 
-    loss = build_loss(loss_name, scored_returns)
-    scenario_final_returns = torch.prod(1.0 + scored_returns, dim=1) - 1.0
+    loss = build_portfolio_objective_loss(
+        loss_name,
+        scored_returns,
+        turnover=scored_turnover,
+        turnover_penalty=turnover_penalty,
+        transaction_cost_rate=transaction_cost_rate,
+    )
+    net_scored_returns = scored_returns - float(transaction_cost_rate) * scored_turnover
+    scenario_final_returns = torch.prod(1.0 + net_scored_returns, dim=1) - 1.0
     summary = {
         "scenario_final_returns": scenario_final_returns,
-        "scenario_mean_step_returns": scored_returns.mean(dim=1),
+        "scenario_mean_step_returns": net_scored_returns.mean(dim=1),
+        "scenario_gross_final_returns": torch.prod(1.0 + scored_returns, dim=1) - 1.0,
     }
-    return loss, scored_returns, summary
+    return loss, net_scored_returns, summary
 
 
 def _resolve_shuffle_train_scenarios_seed(data_config: DataConfig, train_config: TrainConfig) -> int:
@@ -226,6 +248,7 @@ def _evaluate_epoch(
             collect_weights=False,
         )
         scored_returns = rolling_outputs["portfolio_returns"].unsqueeze(0)
+        # TODO(phase-2): extend rolling validation outputs to include turnover and evaluate net returns.
         loss = build_loss(loss_name, scored_returns)
         summary = {
             "scenario_final_returns": torch.prod(1.0 + scored_returns, dim=1) - 1.0,
@@ -543,13 +566,21 @@ def _run_single_train_batch(
     raw_batch: dict[str, Any],
     device: torch.device,
     loss_name: str,
+    turnover_penalty: float = 0.0,
+    transaction_cost_rate: float = 0.0,
     grad_clip_norm: float,
     log_path: Path,
     shape_logged: bool,
 ) -> tuple[float, float, int, bool]:
     batch = _move_batch_to_device(raw_batch, device)
     optimizer.zero_grad(set_to_none=True)
-    loss, portfolio_returns, summary = _run_loss_step(model, batch, loss_name)
+    loss, portfolio_returns, summary = _run_loss_step(
+        model,
+        batch,
+        loss_name,
+        turnover_penalty=turnover_penalty,
+        transaction_cost_rate=transaction_cost_rate,
+    )
     shape_logged = _log_first_training_batch_shapes(
         log_path=log_path,
         batch=batch,
@@ -575,6 +606,8 @@ def _run_training_epoch(
     train_loader: DataLoader,
     device: torch.device,
     loss_name: str,
+    turnover_penalty: float = 0.0,
+    transaction_cost_rate: float = 0.0,
     grad_clip_norm: float,
     epoch: int,
     num_epochs: int,
@@ -606,6 +639,8 @@ def _run_training_epoch(
             raw_batch=raw_batch,
             device=device,
             loss_name=loss_name,
+            turnover_penalty=turnover_penalty,
+            transaction_cost_rate=transaction_cost_rate,
             grad_clip_norm=grad_clip_norm,
             log_path=log_path,
             shape_logged=shape_logged,

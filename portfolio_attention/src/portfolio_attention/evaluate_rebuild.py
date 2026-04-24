@@ -304,6 +304,9 @@ def _rebuild_monitoring_holdout_backtest_directory(
                 stock_count_weight_threshold = float(stock_count_weight_threshold)
             if total_selected_stock_count is not None and stock_count_weight_threshold is None:
                 total_selected_stock_count = None
+            average_turnover = evaluation_shared.coerce_optional_float(
+                artifact.get("average_turnover")
+            )
             metrics_text = evaluation_shared.build_chart_metrics_text(
                 loss_name=loss_name,
                 portfolio_return=float(artifact["final_return"]),
@@ -314,9 +317,7 @@ def _rebuild_monitoring_holdout_backtest_directory(
                 benchmark_information_ratio=evaluation_shared.coerce_optional_float(
                     artifact.get("benchmark_information_ratio")
                 ),
-                benchmark_excess_max_drawdown=evaluation_shared.coerce_optional_float(
-                    artifact.get("benchmark_excess_max_drawdown")
-                ),
+                average_turnover=average_turnover,
                 selected_stock_count=total_selected_stock_count,
                 stock_count_weight_threshold=stock_count_weight_threshold,
             )
@@ -562,8 +563,8 @@ def rebuild_multi_loss_weight_trajectory_overviews(
                     benchmark_information_ratio=evaluation_shared.coerce_optional_float(
                         payload.get("benchmark_information_ratio")
                     ),
-                    benchmark_excess_max_drawdown=evaluation_shared.coerce_optional_float(
-                        payload.get("benchmark_excess_max_drawdown")
+                    average_turnover=evaluation_shared.coerce_optional_float(
+                        payload.get("average_turnover")
                     ),
                     selected_stock_count=total_selected_stock_count,
                     stock_count_weight_threshold=stock_count_weight_threshold,

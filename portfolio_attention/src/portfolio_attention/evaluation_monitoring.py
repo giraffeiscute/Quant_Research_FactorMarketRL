@@ -252,6 +252,7 @@ def _export_monitoring_holdout_payloads(
         "rolling_window_horizon_days",
         "rolling_window_stride_days",
         "num_rolling_windows",
+        "mean_average_turnover",
     ):
         if field_name in monitoring_summary:
             manifest_payload[field_name] = monitoring_summary[field_name]
@@ -279,15 +280,13 @@ def _export_monitoring_holdout_payloads(
             "evaluation_mode": item.get("evaluation_mode"),
             "final_return": float(item["final_return"]),
             "backtest_portfolio_sr": float(item["backtest_portfolio_sr"]),
+            "average_turnover": float(item["average_turnover"]),
             "benchmark_market_index_csv": item.get("benchmark_market_index_csv"),
             "benchmark_excess_return": evaluation_shared.coerce_optional_float(
                 item.get("benchmark_excess_return")
             ),
             "benchmark_information_ratio": evaluation_shared.coerce_optional_float(
                 item.get("benchmark_information_ratio")
-            ),
-            "benchmark_excess_max_drawdown": evaluation_shared.coerce_optional_float(
-                item.get("benchmark_excess_max_drawdown")
             ),
             "rolling_window_lookback_days": item.get("rolling_window_lookback_days"),
             "rolling_window_horizon_days": item.get("rolling_window_horizon_days"),

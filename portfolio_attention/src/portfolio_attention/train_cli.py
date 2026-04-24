@@ -17,6 +17,11 @@ import torch
 from torch.utils.data import Dataset
 
 from .config import DataConfig, ModelConfig, PathsConfig, TrainConfig, default_scenario_dir
+from .config_validation import (
+    validated_data_config,
+    validated_model_config,
+    validated_train_config,
+)
 from .dataset import PortfolioPanelDataset
 from .evaluate_rebuild import (
     cleanup_monitoring_holdout_backtest_artifacts,
@@ -141,6 +146,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=["mlp", "self_attention"],
         default=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--initial-allocation-mode",
+        choices=["equal_weight", "random_dirichlet"],
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--initial-random-concentration",
+        type=float,
+        default=argparse.SUPPRESS,
+    )
     parser.add_argument("--device", default=argparse.SUPPRESS)
     parser.add_argument(
         "--loss",
@@ -152,6 +167,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num-epochs", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--weight-decay", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--turnover-penalty", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--transaction-cost-rate", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--grad-clip-norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--early-stopping-patience", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--resume-from", type=Path, default=argparse.SUPPRESS)
@@ -191,8 +208,8 @@ def resolve_runtime_configs_from_args(
     data_config: DataConfig | None = None,
     train_config: TrainConfig | None = None,
 ) -> tuple[DataConfig, TrainConfig]:
-    resolved_data_config = data_config or DataConfig()
-    resolved_train_config = train_config or TrainConfig()
+    resolved_data_config = validated_data_config(data_config or DataConfig())
+    resolved_train_config = validated_train_config(train_config or TrainConfig())
     args_dict = vars(args)
 
     data_overrides: dict[str, Any] = {}
@@ -221,6 +238,10 @@ def resolve_runtime_configs_from_args(
         train_overrides["num_epochs"] = args_dict["num_epochs"]
     if "weight_decay" in args_dict:
         train_overrides["weight_decay"] = args_dict["weight_decay"]
+    if "turnover_penalty" in args_dict:
+        train_overrides["turnover_penalty"] = args_dict["turnover_penalty"]
+    if "transaction_cost_rate" in args_dict:
+        train_overrides["transaction_cost_rate"] = args_dict["transaction_cost_rate"]
     if "grad_clip_norm" in args_dict:
         train_overrides["grad_clip_norm"] = args_dict["grad_clip_norm"]
     if "early_stopping_patience" in args_dict:
@@ -238,7 +259,10 @@ def resolve_runtime_configs_from_args(
     if train_overrides:
         resolved_train_config = replace(resolved_train_config, **train_overrides)
 
-    return resolved_data_config, resolved_train_config
+    return (
+        validated_data_config(resolved_data_config),
+        validated_train_config(resolved_train_config),
+    )
 
 
 def resolve_model_config_from_args(
@@ -246,7 +270,7 @@ def resolve_model_config_from_args(
     *,
     model_config: ModelConfig | None = None,
 ) -> ModelConfig:
-    resolved_model_config = model_config or ModelConfig()
+    resolved_model_config = validated_model_config(model_config or ModelConfig())
     args_dict = vars(args)
 
     model_overrides: dict[str, Any] = {}
@@ -264,9 +288,13 @@ def resolve_model_config_from_args(
         model_overrides["stock_cross_sectional_encoder_type"] = args_dict[
             "stock_cross_sectional_encoder_type"
         ]
+    if "initial_allocation_mode" in args_dict:
+        model_overrides["initial_allocation_mode"] = args_dict["initial_allocation_mode"]
+    if "initial_random_concentration" in args_dict:
+        model_overrides["initial_random_concentration"] = args_dict["initial_random_concentration"]
     if model_overrides:
         resolved_model_config = replace(resolved_model_config, **model_overrides)
-    return resolved_model_config
+    return validated_model_config(resolved_model_config)
 
 
 def _normalize_losses(raw_losses: list[str]) -> list[str]:

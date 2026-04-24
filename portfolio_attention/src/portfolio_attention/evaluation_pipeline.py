@@ -15,8 +15,13 @@ from .config import (
     EvaluationConfig,
     ModelConfig,
     PathsConfig,
+)
+from .config_validation import (
     normalize_model_config_dict,
     raise_if_checkpoint_uses_legacy_stock_id_representation_type,
+    validated_data_config,
+    validated_evaluation_config,
+    validated_model_config,
 )
 from .dataset import PortfolioPanelDataset
 from .evaluation_artifacts import (
@@ -28,7 +33,7 @@ from .evaluation_artifacts import (
 )
 from .evaluation_runtime import _collect_holdout_per_scenario_payloads
 from .model import PortfolioAttentionModel
-from .utils import ensure_output_dirs, resolve_device, save_json
+from .utils import ensure_output_dirs, resolve_device, save_json, set_seed
 
 
 def _resolve_checkpoint_state(data_config: DataConfig) -> str | None:
@@ -68,7 +73,7 @@ def _build_model_config_from_checkpoint(checkpoint: dict[str, Any]) -> ModelConf
         for key, value in normalized_model_config.items()
         if key in ModelConfig.__dataclass_fields__
     }
-    return ModelConfig(**filtered_config_dict)
+    return validated_model_config(ModelConfig(**filtered_config_dict))
 
 
 def _build_data_config_from_checkpoint(
@@ -85,11 +90,11 @@ def _build_data_config_from_checkpoint(
         if key in DataConfig.__dataclass_fields__
     }
     if not filtered_config_dict:
-        return fallback_data_config
+        return validated_data_config(fallback_data_config)
 
     fallback_dict = fallback_data_config.__dict__.copy()
     fallback_dict.update(filtered_config_dict)
-    return DataConfig(**fallback_dict)
+    return validated_data_config(DataConfig(**fallback_dict))
 
 
 def _validate_checkpoint_metadata(checkpoint: dict[str, Any], dataset: PortfolioPanelDataset) -> None:
@@ -112,9 +117,10 @@ def run_evaluation(
     dataset: PortfolioPanelDataset | None = None,
     holdout_dataset: Dataset | None = None,
 ) -> dict[str, Any]:
+    data_config = validated_data_config(data_config)
     ensure_output_dirs(paths)
     device = resolve_device(device_name)
-    resolved_evaluation_config = evaluation_config or EvaluationConfig()
+    resolved_evaluation_config = validated_evaluation_config(evaluation_config or EvaluationConfig())
     resolved_checkpoint = _resolve_checkpoint_path(
         paths=paths,
         data_config=data_config,
@@ -122,6 +128,14 @@ def run_evaluation(
         loss_name=loss_name,
     )
     checkpoint = torch.load(resolved_checkpoint, map_location=device, weights_only=False)
+    checkpoint_train_config = checkpoint.get("train_config", {})
+    checkpoint_seed = (
+        checkpoint_train_config.get("seed")
+        if isinstance(checkpoint_train_config, dict)
+        else None
+    )
+    if checkpoint_seed is not None:
+        set_seed(int(checkpoint_seed))
     resolved_data_config = _build_data_config_from_checkpoint(
         checkpoint,
         fallback_data_config=data_config,
@@ -149,7 +163,6 @@ def run_evaluation(
     ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
 
-    checkpoint_train_config = checkpoint.get("train_config", {})
     checkpoint_loss_name = str(checkpoint_train_config.get("loss_name", loss_name or "unknown")).lower()
     state_predictions_dir = paths.get_state_predictions_dir(resolved_dataset.state)
     state_predictions_dir.mkdir(parents=True, exist_ok=True)
@@ -197,6 +210,7 @@ def run_evaluation(
             "final_return": item["final_return"],
             "mean_step_return": item["mean_step_return"],
             "std_step_return": item["std_step_return"],
+            "average_turnover": item["average_turnover"],
             "final_cash_weight": item["final_cash_weight"],
             "mean_cash_weight": item["mean_cash_weight"],
         }
