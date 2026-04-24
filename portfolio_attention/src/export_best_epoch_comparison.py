@@ -18,16 +18,16 @@ if str(SRC_DIR) not in sys.path:
 STATE_NAMES = ("bear", "neutral", "bull")
 LOSS_NAMES = ("sharpe",)
 # Edit these when switching the comparison targets.
-RESULT_DIR_1 = PROJECT_DIR / "outputs" / "result v9 learnable stock embedding"
+RESULT_DIR_1 = PROJECT_DIR / "outputs" / "result v14 temp attention add stock embedding nom fix"
 RESULT_DIR_2 = PROJECT_DIR / "outputs" / "result v15 temp attention concat stock embedding non linear"
-RESULT_DIR_3 = PROJECT_DIR / "outputs" / "result v14 temp attention add stock embedding nom fix"
-RESULT_DIR_4 = PROJECT_DIR / "outputs" / "result v16 temp stock attention add"
+RESULT_DIR_3 = PROJECT_DIR / "outputs" / "result v17 temp stock attention concat"
+RESULT_DIR_4 = PROJECT_DIR / "outputs" / "result v18 add dropout 0.1"
 OUTPUT_DIR = PROJECT_DIR / "outputs"
 # Leave blank to auto-generate a readable label from the directory name.
-LABEL_1 = "mlp concat"
+LABEL_1 = "temp add"
 LABEL_2 = "temp concat"
-LABEL_3 = "temp add"
-LABEL_4 = "temp stock add"
+LABEL_3 = "temp stock concat"
+LABEL_4 = "temp stock dropout"
 COMPARISON_CSV_NAME = "best_epoch_state_loss_comparison.csv"
 SUMMARY_CSV_NAME = "best_epoch_state_summary.csv"
 
@@ -148,6 +148,41 @@ def _coerce_float(value: Any, *, field_name: str, manifest_path: Path, scenario_
         ) from exc
 
 
+def _coerce_optional_float(
+    value: Any,
+    *,
+    field_name: str,
+    manifest_path: Path,
+    scenario_id: str,
+) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Scenario {scenario_id!r} in {manifest_path} has invalid {field_name}: {value!r}"
+        ) from exc
+
+
+def _pick_optional_float(
+    source: dict[str, Any],
+    *,
+    keys: tuple[str, ...],
+    manifest_path: Path,
+    scenario_id: str,
+) -> float | None:
+    for key in keys:
+        if key in source:
+            return _coerce_optional_float(
+                source.get(key),
+                field_name=key,
+                manifest_path=manifest_path,
+                scenario_id=scenario_id,
+            )
+    return None
+
+
 def _extract_epoch_from_dir(epoch_dir: Path) -> int:
     token = epoch_dir.name.split("_", 1)[0].strip()
     if not token:
@@ -167,6 +202,12 @@ def _mean(values: list[float], *, context: str) -> float:
     return sum(values) / len(values)
 
 
+def _mean_optional(values: list[float], *, context: str) -> float | None:
+    if not values:
+        return None
+    return _mean(values, context=context)
+
+
 def _format_scenario_id(raw_scenario_id: str) -> str:
     token = str(raw_scenario_id).strip()
     if not token:
@@ -179,19 +220,31 @@ def _format_scenario_id(raw_scenario_id: str) -> str:
 
 def _scenario_metrics_from_manifest(
     manifest_path: Path,
-) -> list[dict[str, float | str]]:
+) -> list[dict[str, float | str | None]]:
     payload = _load_manifest(manifest_path)
     scenario_artifacts = payload.get("scenario_artifacts")
     if not isinstance(scenario_artifacts, list) or not scenario_artifacts:
         raise ValueError(f"Manifest must provide a non-empty scenario_artifacts list: {manifest_path}")
 
-    rows: list[dict[str, float | str]] = []
+    manifest_mean_turnover = _pick_optional_float(
+        payload,
+        keys=("mean_average_turnover", "mean_turnover", "turnover_rate"),
+        manifest_path=manifest_path,
+        scenario_id="__manifest__",
+    )
+    rows: list[dict[str, float | str | None]] = []
     for item in scenario_artifacts:
         if not isinstance(item, dict):
             raise ValueError(f"Manifest scenario_artifacts entries must be objects: {manifest_path}")
         scenario_id = str(item.get("scenario_id", "")).strip()
         if not scenario_id:
             raise ValueError(f"Manifest scenario_artifacts entries must include scenario_id: {manifest_path}")
+        scenario_turnover = _pick_optional_float(
+            item,
+            keys=("average_turnover", "turnover_rate", "turnover", "mean_average_turnover"),
+            manifest_path=manifest_path,
+            scenario_id=scenario_id,
+        )
         rows.append(
             {
                 "scenario_id": _format_scenario_id(scenario_id),
@@ -213,6 +266,7 @@ def _scenario_metrics_from_manifest(
                     manifest_path=manifest_path,
                     scenario_id=scenario_id,
                 ),
+                "turnover_rate": scenario_turnover if scenario_turnover is not None else manifest_mean_turnover,
             }
         )
     return rows
@@ -305,14 +359,20 @@ def _average_loss_rows(
     loss_scenarios: dict[str, dict[str, float | str]],
     *,
     context: str,
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, float | None]:
     return_values = [float(item["portfolio_return"]) for item in loss_scenarios.values()]
     sr_values = [float(item["portfolio_sr"]) for item in loss_scenarios.values()]
     selected_stock_counts = [float(item["selected_stock_count"]) for item in loss_scenarios.values()]
+    turnover_values = [
+        float(item["turnover_rate"])
+        for item in loss_scenarios.values()
+        if item.get("turnover_rate") is not None
+    ]
     return (
         _mean(return_values, context=f"{context}: portfolio_return"),
         _mean(sr_values, context=f"{context}: portfolio_sr"),
         _mean(selected_stock_counts, context=f"{context}: selected_stock_count"),
+        _mean_optional(turnover_values, context=f"{context}: turnover_rate"),
     )
 
 
@@ -338,12 +398,13 @@ def _build_comparison_rows(
             }
             for label, best_payload in state_payloads:
                 average_row[f"{label}_best_epoch"] = best_payload["epoch"]
-                avg_return, avg_sr, _ = _average_loss_rows(
+                avg_return, avg_sr, _, avg_turnover = _average_loss_rows(
                     loss_rows_by_label[label],
                     context=f"{state}/{loss_name}/{label}",
                 )
                 average_row[f"{label}_return"] = avg_return
                 average_row[f"{label}_sr"] = avg_sr
+                average_row[f"{label}_turnover"] = avg_turnover
             rows.append(average_row)
 
             all_scenario_ids = sorted(
@@ -369,6 +430,11 @@ def _build_comparison_rows(
                     scenario_row[f"{label}_sr"] = (
                         float(row["portfolio_sr"]) if row is not None else ""
                     )
+                    scenario_row[f"{label}_turnover"] = (
+                        float(row["turnover_rate"])
+                        if row is not None and row.get("turnover_rate") is not None
+                        else None
+                    )
                 rows.append(scenario_row)
 
     return rows
@@ -387,20 +453,24 @@ def _build_summary_rows(
             mean_return_by_label: dict[str, float] = {}
             mean_sr_by_label: dict[str, float] = {}
             mean_stocks_by_label: dict[str, float] = {}
+            mean_turnover_by_label: dict[str, float | None] = {}
             for label, best_payload in state_payloads:
-                avg_return, avg_sr, avg_stocks_bought = _average_loss_rows(
+                avg_return, avg_sr, avg_stocks_bought, avg_turnover = _average_loss_rows(
                     best_payload["per_loss_scenarios"][loss_name],
                     context=f"{state}/{loss_name}/{label}/summary",
                 )
                 mean_return_by_label[label] = avg_return
                 mean_sr_by_label[label] = avg_sr
                 mean_stocks_by_label[label] = avg_stocks_bought
+                mean_turnover_by_label[label] = avg_turnover
             for label, _ in state_payloads:
                 row[f"{label}_{loss_name}_mean_return"] = mean_return_by_label[label]
             for label, _ in state_payloads:
                 row[f"{label}_{loss_name}_mean_sr"] = mean_sr_by_label[label]
             for label, _ in state_payloads:
                 row[f"{label}_{loss_name}_mean_stocks"] = mean_stocks_by_label[label]
+            for label, _ in state_payloads:
+                row[f"{label}_{loss_name}_mean_turnover"] = mean_turnover_by_label[label]
         rows.append(row)
     return rows
 
@@ -413,6 +483,9 @@ def _write_csv(output_path: Path, rows: list[dict[str, Any]], fieldnames: list[s
         for row in rows:
             normalized_row = {
                 key: (
+                    "None"
+                    if value is None
+                    else
                     round(float(value))
                     if key.endswith("_mean_stocks") and isinstance(value, Real)
                     else round(float(value), 2)
@@ -469,6 +542,7 @@ def main() -> None:
             *[f"{label}_best_epoch" for label in labels],
             *[f"{label}_return" for label in labels],
             *[f"{label}_sr" for label in labels],
+            *[f"{label}_turnover" for label in labels],
         ],
     )
     _write_csv(
@@ -484,6 +558,7 @@ def main() -> None:
                     *[f"{label}_{loss_name}_mean_return" for label in labels],
                     *[f"{label}_{loss_name}_mean_sr" for label in labels],
                     *[f"{label}_{loss_name}_mean_stocks" for label in labels],
+                    *[f"{label}_{loss_name}_mean_turnover" for label in labels],
                 )
             ],
         ],
