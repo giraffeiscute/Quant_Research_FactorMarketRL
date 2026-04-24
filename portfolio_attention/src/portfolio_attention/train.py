@@ -265,6 +265,7 @@ def _run_epoch_training_with_datasets(
                 loss_name=train_config.loss_name,
                 turnover_penalty=train_config.turnover_penalty,
                 transaction_cost_rate=train_config.transaction_cost_rate,
+                turnover_penalty_norm=train_config.turnover_penalty_norm,
                 grad_clip_norm=train_config.grad_clip_norm,
                 epoch=epoch,
                 num_epochs=train_config.num_epochs,

@@ -168,6 +168,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-epochs", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--weight-decay", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--turnover-penalty", type=float, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--turnover-penalty-norm",
+        choices=["l1", "l2"],
+        default=None,
+        help=(
+            "Norm used for turnover regularization: "
+            "l1 keeps turnover.mean(); l2 uses turnover.pow(2).mean()."
+        ),
+    )
     parser.add_argument("--transaction-cost-rate", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--grad-clip-norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--early-stopping-patience", type=int, default=argparse.SUPPRESS)
@@ -240,6 +249,8 @@ def resolve_runtime_configs_from_args(
         train_overrides["weight_decay"] = args_dict["weight_decay"]
     if "turnover_penalty" in args_dict:
         train_overrides["turnover_penalty"] = args_dict["turnover_penalty"]
+    if args_dict.get("turnover_penalty_norm") is not None:
+        train_overrides["turnover_penalty_norm"] = args_dict["turnover_penalty_norm"]
     if "transaction_cost_rate" in args_dict:
         train_overrides["transaction_cost_rate"] = args_dict["transaction_cost_rate"]
     if "grad_clip_norm" in args_dict:

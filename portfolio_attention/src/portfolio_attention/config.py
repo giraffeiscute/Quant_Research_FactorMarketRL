@@ -130,7 +130,7 @@ class ModelConfig:
     stock_temporal_encoder_type: Literal["running_summary", "causal_self_attention"] = "causal_self_attention"
     stock_cross_sectional_encoder_type: Literal["mlp", "self_attention"] = "self_attention"
     time_positional_encoding_type: Literal["none", "sinusoidal"] = "sinusoidal"
-    allocation_smoothing_alpha: float = 1.0
+    allocation_smoothing_alpha: float = 0.7
     initial_allocation_mode: str = "equal_weight"
     initial_random_concentration: float = 1.0
     dropout: float = 0.1
@@ -152,8 +152,9 @@ class TrainConfig:
     select_best_from_last_x_epochs: int = 1
     holdout_backtest_interval_epochs: int = 1
     enable_fixed_epoch_holdout_backtests: bool = False
-    turnover_penalty: float = 0.0
-    transaction_cost_rate: float = 0.001
+    turnover_penalty: float = 0.003
+    turnover_penalty_norm: str = "l1"
+    transaction_cost_rate: float = 0.0
     loss_name: str = ""
     device: str = "auto"
     resume_from: Path | None = None

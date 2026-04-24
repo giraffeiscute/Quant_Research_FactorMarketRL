@@ -336,6 +336,7 @@ class PortfolioLightningModule(pl.LightningModule):
             self.train_config.loss_name,
             turnover_penalty=self.train_config.turnover_penalty,
             transaction_cost_rate=self.train_config.transaction_cost_rate,
+            turnover_penalty_norm=self.train_config.turnover_penalty_norm,
         )
         train_mean_final_return = summary["scenario_final_returns"].mean()
         batch_size = int(summary["scenario_final_returns"].numel())

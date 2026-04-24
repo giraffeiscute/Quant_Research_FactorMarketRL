@@ -51,6 +51,22 @@ def _coerce_turnover(turnover: torch.Tensor | None, *, reference: torch.Tensor) 
     return turnover
 
 
+def compute_turnover_penalty(
+    turnover: torch.Tensor,
+    *,
+    norm: str = "l1",
+) -> torch.Tensor:
+    resolved_norm = str(norm).strip().lower()
+    if resolved_norm == "l1":
+        return turnover.abs().mean()
+    if resolved_norm == "l2":
+        return turnover.pow(2).mean()
+    raise ValueError(
+        "turnover_penalty_norm must be one of {'l1', 'l2'}, "
+        f"received {norm!r}."
+    )
+
+
 # 計算投資組合整段路徑的最終報酬損失，回傳負值供最小化。
 def return_loss(
     portfolio_returns: torch.Tensor,
@@ -242,6 +258,7 @@ def build_portfolio_objective_loss(
     turnover: torch.Tensor | None = None,
     turnover_penalty: float = 0.0,
     transaction_cost_rate: float = 0.0,
+    turnover_penalty_norm: str = "l1",
     **kwargs,
 ) -> torch.Tensor:
     scored_returns = _coerce_portfolio_returns(portfolio_returns)
@@ -259,5 +276,9 @@ def build_portfolio_objective_loss(
     if resolved_turnover_penalty > 0.0:
         if scored_turnover is None:
             raise ValueError("turnover is required when turnover_penalty > 0.")
-        loss = loss + resolved_turnover_penalty * scored_turnover.mean()
+        turnover_regularizer = compute_turnover_penalty(
+            scored_turnover,
+            norm=turnover_penalty_norm,
+        )
+        loss = loss + resolved_turnover_penalty * turnover_regularizer
     return loss

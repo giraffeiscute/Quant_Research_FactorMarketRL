@@ -256,6 +256,7 @@ def _validate_resume_checkpoint(
     legacy_missing_train_config_defaults = {
         "enable_fixed_epoch_holdout_backtests": False,
         "turnover_penalty": 0.0,
+        "turnover_penalty_norm": "l1",
         "transaction_cost_rate": 0.0,
     }
     for key, expected_value in current_train_config.items():

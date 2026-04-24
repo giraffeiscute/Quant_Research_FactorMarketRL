@@ -530,7 +530,12 @@ class PortfolioAttentionModel(nn.Module):
         market_summary: torch.Tensor,
         stock_identity: torch.Tensor | None,
         initial_allocation: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        dict[str, Any],
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None,
+    ]:
         num_scenarios, time_steps, num_stocks, _ = stock_temporal_current.shape
         market_current_expanded = market_current.unsqueeze(2).expand(-1, -1, num_stocks, -1)
         market_summary_expanded = market_summary.unsqueeze(2).expand(-1, -1, num_stocks, -1)
@@ -566,6 +571,7 @@ class PortfolioAttentionModel(nn.Module):
                     "stock_attention_input_shape": None,
                     "stock_attention_weight_shape": None,
                 },
+                None,
             )
 
         if self.stock_cross_sectional_encoder_type != "self_attention":
@@ -654,6 +660,9 @@ class PortfolioAttentionModel(nn.Module):
         alpha = float(self.allocation_smoothing_alpha)
         stock_logits_by_step: list[torch.Tensor] = []
         cash_logit_by_step: list[torch.Tensor] = []
+        raw_allocations_by_step: list[torch.Tensor] = []
+        allocations_by_step: list[torch.Tensor] = []
+        turnovers_by_step: list[torch.Tensor] = []
         for time_index in range(time_steps):
             attended_stock_t = attended_stock[:, time_index, :, :]
             stock_state_input = torch.cat(
@@ -670,12 +679,22 @@ class PortfolioAttentionModel(nn.Module):
 
             allocation_logits_t = torch.cat([stock_logit_t, cash_logit_t.unsqueeze(-1)], dim=-1)
             raw_t = torch.softmax(allocation_logits_t, dim=-1)
-            prev_weight = alpha * raw_t + (1.0 - alpha) * prev_weight
+            allocation_t = alpha * raw_t + (1.0 - alpha) * prev_weight
+            turnover_t = 0.5 * torch.abs(allocation_t - prev_weight).sum(dim=-1)
 
             stock_logits_by_step.append(stock_logit_t)
             cash_logit_by_step.append(cash_logit_t)
+            raw_allocations_by_step.append(raw_t)
+            allocations_by_step.append(allocation_t)
+            turnovers_by_step.append(turnover_t)
+            prev_weight = allocation_t
         stock_logits = torch.stack(stock_logits_by_step, dim=1)
         cash_logit = torch.stack(cash_logit_by_step, dim=1)
+        precomputed_smoothing = (
+            torch.stack(raw_allocations_by_step, dim=1),
+            torch.stack(allocations_by_step, dim=1),
+            torch.stack(turnovers_by_step, dim=1),
+        )
         return (
             stock_logits,
             cash_logit,
@@ -685,6 +704,7 @@ class PortfolioAttentionModel(nn.Module):
                 "stock_attention_input_shape": tuple(stock_attention_inputs.shape),
                 "stock_attention_weight_shape": tuple(attention_weights.shape),
             },
+            precomputed_smoothing,
         )
 
     def forward(
@@ -754,7 +774,7 @@ class PortfolioAttentionModel(nn.Module):
             dtype=stock_temporal_current.dtype,
         )
 
-        stock_logits, cash_logit, stock_debug_info = self._score_stock_allocation(
+        score_outputs = self._score_stock_allocation(
             stock_temporal_current=stock_temporal_current,
             stock_temporal_summary=stock_temporal_summary,
             market_current=market_current,
@@ -762,13 +782,27 @@ class PortfolioAttentionModel(nn.Module):
             stock_identity=stock_identity_for_scoring,
             initial_allocation=initial_allocation,
         )
+        if len(score_outputs) == 3:
+            stock_logits, cash_logit, stock_debug_info = score_outputs
+            precomputed_smoothing = None
+        elif len(score_outputs) == 4:
+            stock_logits, cash_logit, stock_debug_info, precomputed_smoothing = score_outputs
+        else:
+            raise ValueError(
+                "_score_stock_allocation must return either "
+                "(stock_logits, cash_logit, debug_info) or "
+                "(stock_logits, cash_logit, debug_info, precomputed_smoothing)."
+            )
 
         allocation_logits = torch.cat([stock_logits, cash_logit.unsqueeze(-1)], dim=-1)
-        raw_allocation, allocation, turnover = self._smooth_allocation_from_logits(
-            allocation_logits=allocation_logits,
-            num_stocks=num_stocks,
-            initial_allocation=initial_allocation,
-        )
+        if precomputed_smoothing is None:
+            raw_allocation, allocation, turnover = self._smooth_allocation_from_logits(
+                allocation_logits=allocation_logits,
+                num_stocks=num_stocks,
+                initial_allocation=initial_allocation,
+            )
+        else:
+            raw_allocation, allocation, turnover = precomputed_smoothing
         stock_weights = allocation[..., :-1]
         cash_weight = allocation[..., -1]
 

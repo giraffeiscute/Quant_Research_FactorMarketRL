@@ -304,6 +304,15 @@ def validate_train_config(config: TrainConfig) -> None:
             f"received {config.turnover_penalty}."
         )
 
+    config.turnover_penalty_norm = str(config.turnover_penalty_norm).strip().lower()
+    valid_turnover_penalty_norms = {"l1", "l2"}
+    if config.turnover_penalty_norm not in valid_turnover_penalty_norms:
+        raise ValueError(
+            "TrainConfig.turnover_penalty_norm must be one of "
+            f"{sorted(valid_turnover_penalty_norms)}, "
+            f"received {config.turnover_penalty_norm!r}."
+        )
+
     config.transaction_cost_rate = float(config.transaction_cost_rate)
     if config.transaction_cost_rate < 0.0:
         raise ValueError(

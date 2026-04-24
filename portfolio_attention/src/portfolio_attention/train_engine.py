@@ -163,6 +163,7 @@ def _run_loss_step(
     *,
     turnover_penalty: float = 0.0,
     transaction_cost_rate: float = 0.0,
+    turnover_penalty_norm: str = "l1",
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
     outputs = model(
         batch["x_stock"],
@@ -203,6 +204,7 @@ def _run_loss_step(
         turnover=scored_turnover,
         turnover_penalty=turnover_penalty,
         transaction_cost_rate=transaction_cost_rate,
+        turnover_penalty_norm=turnover_penalty_norm,
     )
     net_scored_returns = scored_returns - float(transaction_cost_rate) * scored_turnover
     scenario_final_returns = torch.prod(1.0 + net_scored_returns, dim=1) - 1.0
@@ -568,6 +570,7 @@ def _run_single_train_batch(
     loss_name: str,
     turnover_penalty: float = 0.0,
     transaction_cost_rate: float = 0.0,
+    turnover_penalty_norm: str = "l1",
     grad_clip_norm: float,
     log_path: Path,
     shape_logged: bool,
@@ -580,6 +583,7 @@ def _run_single_train_batch(
         loss_name,
         turnover_penalty=turnover_penalty,
         transaction_cost_rate=transaction_cost_rate,
+        turnover_penalty_norm=turnover_penalty_norm,
     )
     shape_logged = _log_first_training_batch_shapes(
         log_path=log_path,
@@ -608,6 +612,7 @@ def _run_training_epoch(
     loss_name: str,
     turnover_penalty: float = 0.0,
     transaction_cost_rate: float = 0.0,
+    turnover_penalty_norm: str = "l1",
     grad_clip_norm: float,
     epoch: int,
     num_epochs: int,
@@ -641,6 +646,7 @@ def _run_training_epoch(
             loss_name=loss_name,
             turnover_penalty=turnover_penalty,
             transaction_cost_rate=transaction_cost_rate,
+            turnover_penalty_norm=turnover_penalty_norm,
             grad_clip_norm=grad_clip_norm,
             log_path=log_path,
             shape_logged=shape_logged,
