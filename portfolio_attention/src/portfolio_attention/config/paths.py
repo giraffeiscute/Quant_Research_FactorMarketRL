@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 
 def project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def repo_root() -> Path:
