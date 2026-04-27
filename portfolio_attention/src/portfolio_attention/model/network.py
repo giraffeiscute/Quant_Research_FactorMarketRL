@@ -8,7 +8,7 @@ import torch
 from torch import nn
 import math
 
-from .config import ModelConfig
+from ..config import ModelConfig
 
 
 class PortfolioAttentionModel(nn.Module):

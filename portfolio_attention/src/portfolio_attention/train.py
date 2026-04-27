@@ -546,8 +546,8 @@ run_training = run_epoch_training
 
 if __name__ == "__main__":
     if __package__ is None or __package__ == "":
-        from portfolio_attention.train_cli import main
+        from portfolio_attention.cli.train import main
     else:
-        from .train_cli import main
+        from .cli.train import main
 
     main()

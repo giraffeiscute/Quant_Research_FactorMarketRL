@@ -1,0 +1,43 @@
+"""Configuration facade with backward-compatible public exports."""
+
+from .paths import default_scenario_dir, project_root, repo_root
+from .schema import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
+from .validation import (
+    LEGACY_LOOKBACK_MODES,
+    LOOKBACK_MODE_ROLLING_WINDOW,
+    normalize_lookback_mode,
+    normalize_model_config_dict,
+    raise_if_checkpoint_uses_legacy_stock_id_representation_type,
+    validate_data_config,
+    validate_evaluation_config,
+    validate_model_config,
+    validate_train_config,
+    validated_data_config,
+    validated_evaluation_config,
+    validated_model_config,
+    validated_train_config,
+)
+
+__all__ = [
+    "DataConfig",
+    "EvaluationConfig",
+    "ModelConfig",
+    "PathsConfig",
+    "TrainConfig",
+    "default_scenario_dir",
+    "project_root",
+    "repo_root",
+    "LEGACY_LOOKBACK_MODES",
+    "LOOKBACK_MODE_ROLLING_WINDOW",
+    "normalize_lookback_mode",
+    "normalize_model_config_dict",
+    "raise_if_checkpoint_uses_legacy_stock_id_representation_type",
+    "validate_data_config",
+    "validate_evaluation_config",
+    "validate_model_config",
+    "validate_train_config",
+    "validated_data_config",
+    "validated_evaluation_config",
+    "validated_model_config",
+    "validated_train_config",
+]
