@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -156,7 +156,10 @@ def compute_monitoring_holdout_backtest_payload(
     epoch: int,
     device: torch.device,
     evaluation_config: EvaluationConfig | None = None,
+    interrupt_checker: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
+    if interrupt_checker is not None:
+        interrupt_checker()
     resolved_evaluation_config = evaluation_config or EvaluationConfig()
     holdout_loader = DataLoader(
         holdout_dataset,
@@ -175,12 +178,30 @@ def compute_monitoring_holdout_backtest_payload(
         loss_name=loss_name,
         evaluation_config=resolved_evaluation_config,
         checkpoint=checkpoint,
+        interrupt_checker=interrupt_checker,
     )
+    if interrupt_checker is not None:
+        interrupt_checker()
     if len(per_scenario_payloads) != len(holdout_dataset):
         raise RuntimeError(
             "Holdout monitoring backtest did not produce a per-scenario payload for every holdout scenario."
         )
 
+    return build_monitoring_backtest_payload_from_per_scenario_payloads(
+        per_scenario_payloads=per_scenario_payloads,
+        dataset=dataset,
+        loss_name=loss_name,
+        epoch=int(epoch),
+    )
+
+
+def build_monitoring_backtest_payload_from_per_scenario_payloads(
+    *,
+    per_scenario_payloads: list[dict[str, Any]],
+    dataset: PortfolioPanelDataset,
+    loss_name: str,
+    epoch: int,
+) -> dict[str, Any]:
     monitoring_summary = build_holdout_summary_payload(
         per_scenario_payloads,
         dataset=dataset,
@@ -206,7 +227,10 @@ def _export_monitoring_holdout_payloads(
     dataset: PortfolioPanelDataset,
     paths: PathsConfig,
     evaluation_config: EvaluationConfig,
+    interrupt_checker: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
+    if interrupt_checker is not None:
+        interrupt_checker()
     ensure_output_dirs(paths)
     per_scenario_payloads = list(monitoring_backtest_payload["per_scenario_payloads"])
     monitoring_summary = dict(monitoring_backtest_payload["monitoring_summary"])
@@ -218,6 +242,8 @@ def _export_monitoring_holdout_payloads(
 
     manifest_scenario_artifacts: list[dict[str, Any]] = []
     for scenario_index, scenario_payload in enumerate(per_scenario_payloads, start=1):
+        if interrupt_checker is not None:
+            interrupt_checker()
         grouped_weight_trajectories = build_monitoring_grouped_weight_trajectories(
             scenario_payload=scenario_payload,
             dataset=dataset,
@@ -231,6 +257,8 @@ def _export_monitoring_holdout_payloads(
                 output_dir=output_dir,
             )
         )
+        if interrupt_checker is not None:
+            interrupt_checker()
 
     manifest_path = _monitoring_holdout_backtest_manifest_path(output_dir, loss_name)
     manifest_payload = {
@@ -258,11 +286,16 @@ def _export_monitoring_holdout_payloads(
             manifest_payload[field_name] = monitoring_summary[field_name]
     save_json(manifest_payload, manifest_path)
 
+    if interrupt_checker is not None:
+        interrupt_checker()
     generated_paths = rebuild_monitoring_holdout_backtest_overviews(
         paths,
         state=dataset.state,
         epoch=int(epoch),
+        interrupt_checker=interrupt_checker,
     )
+    if interrupt_checker is not None:
+        interrupt_checker()
     overview_path_by_scenario = {
         path_obj.name[: -len(WEIGHT_TRAJECTORY_OVERVIEW_FILENAME_SUFFIX)]: str(path_obj)
         for path_obj in (Path(path) for path in generated_paths)
@@ -322,7 +355,10 @@ def run_monitoring_holdout_backtest(
     data_config: DataConfig | None = None,
     model_config: ModelConfig | None = None,
     train_config: TrainConfig | None = None,
+    interrupt_checker: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
+    if interrupt_checker is not None:
+        interrupt_checker()
     ensure_output_dirs(paths)
     resolved_evaluation_config = evaluation_config or EvaluationConfig()
     monitoring_backtest_payload = compute_monitoring_holdout_backtest_payload(
@@ -333,14 +369,55 @@ def run_monitoring_holdout_backtest(
         epoch=int(epoch),
         device=device,
         evaluation_config=resolved_evaluation_config,
+        interrupt_checker=interrupt_checker,
+    )
+    return run_monitoring_holdout_backtest_from_per_scenario_payloads(
+        per_scenario_payloads=monitoring_backtest_payload["per_scenario_payloads"],
+        dataset=dataset,
+        loss_name=loss_name,
+        epoch=int(epoch),
+        paths=paths,
+        evaluation_config=resolved_evaluation_config,
+        data_config=data_config,
+        model_config=model_config,
+        train_config=train_config,
+        interrupt_checker=interrupt_checker,
+    )
+
+
+def run_monitoring_holdout_backtest_from_per_scenario_payloads(
+    *,
+    per_scenario_payloads: list[dict[str, Any]],
+    dataset: PortfolioPanelDataset,
+    loss_name: str,
+    epoch: int,
+    paths: PathsConfig,
+    evaluation_config: EvaluationConfig | None = None,
+    data_config: DataConfig | None = None,
+    model_config: ModelConfig | None = None,
+    train_config: TrainConfig | None = None,
+    interrupt_checker: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    if interrupt_checker is not None:
+        interrupt_checker()
+    ensure_output_dirs(paths)
+    resolved_evaluation_config = evaluation_config or EvaluationConfig()
+    monitoring_backtest_payload = build_monitoring_backtest_payload_from_per_scenario_payloads(
+        per_scenario_payloads=list(per_scenario_payloads),
+        dataset=dataset,
+        loss_name=loss_name,
+        epoch=int(epoch),
     )
     monitoring_result = _export_monitoring_holdout_payloads(
         monitoring_backtest_payload=monitoring_backtest_payload,
         dataset=dataset,
         paths=paths,
         evaluation_config=resolved_evaluation_config,
+        interrupt_checker=interrupt_checker,
     )
     if data_config is not None and model_config is not None and train_config is not None:
+        if interrupt_checker is not None:
+            interrupt_checker()
         _save_runtime_config_snapshot(
             paths=paths,
             state=dataset.state,

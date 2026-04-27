@@ -130,8 +130,8 @@ class ModelConfig:
     stock_temporal_encoder_type: Literal["running_summary", "causal_self_attention"] = "causal_self_attention"
     stock_cross_sectional_encoder_type: Literal["mlp", "self_attention"] = "self_attention"
     time_positional_encoding_type: Literal["none", "sinusoidal"] = "sinusoidal"
-    allocation_smoothing_alpha: float = 0.7
-    initial_allocation_mode: str = "equal_weight"
+    allocation_smoothing_alpha: float = 1
+    initial_allocation_mode: Literal["equal_weight", "random_dirichlet"] = "random_dirichlet"
     initial_random_concentration: float = 1.0
     dropout: float = 0.1
 
@@ -152,10 +152,10 @@ class TrainConfig:
     select_best_from_last_x_epochs: int = 1
     holdout_backtest_interval_epochs: int = 1
     enable_fixed_epoch_holdout_backtests: bool = False
-    turnover_penalty: float = 0.01
-    turnover_penalty_norm: str = "l1"
+    turnover_penalty: float = 10
+    turnover_penalty_norm: Literal["l1", "l2"] = "l2"
     transaction_cost_rate: float = 0.0
-    loss_name: str = ""
+    loss_name: Literal["", "return", "sharpe", "dsr", "sortino", "mdd", "cvar"] = ""
     device: str = "auto"
     resume_from: Path | None = None
     def _checkpoint_name(self, stem: str, state: str | None = None) -> str:
@@ -186,3 +186,7 @@ class EvaluationConfig:
     allocation_group_top_n: int = 7
     stock_count_weight_threshold: float = 0.001
     stock_count_min_active_days: int = 2
+
+
+# Backward-compatible re-export for legacy script imports.
+from .config_validation import normalize_model_config_dict

@@ -213,9 +213,14 @@ def _rebuild_monitoring_holdout_backtest_directory(
     state: str,
     output_dir: Path,
     loss_order: list[str] | tuple[str, ...] | None = None,
+    interrupt_checker: Callable[[], None] | None = None,
 ) -> list[str]:
+    if interrupt_checker is not None:
+        interrupt_checker()
     manifest_payloads: dict[str, tuple[Path, dict[str, Any]]] = {}
     for manifest_path in sorted(output_dir.glob(f"*{MONITORING_HOLDOUT_BACKTEST_MANIFEST_SUFFIX}")):
+        if interrupt_checker is not None:
+            interrupt_checker()
         payload = evaluation_shared.PersistedArtifactLoader.load_json_object(
             manifest_path,
             expected_artifact_type="monitoring_holdout_backtest_manifest",
@@ -249,6 +254,8 @@ def _rebuild_monitoring_holdout_backtest_directory(
 
     per_loss_artifacts: dict[str, dict[str, dict[str, Any]]] = {}
     for loss_name, (_, payload) in selected_manifest_payloads.items():
+        if interrupt_checker is not None:
+            interrupt_checker()
         payload_state = str(payload.get("state", "")).lower()
         if payload_state and payload_state != state.lower():
             return []
@@ -285,8 +292,12 @@ def _rebuild_monitoring_holdout_backtest_directory(
     generated_paths: list[str] = []
     overview_path_by_scenario: dict[str, str] = {}
     for scenario_id in scenario_ids:
+        if interrupt_checker is not None:
+            interrupt_checker()
         per_loss_chart_data: dict[str, dict[str, object]] = {}
         for loss_name in resolved_loss_order:
+            if interrupt_checker is not None:
+                interrupt_checker()
             artifact = per_loss_artifacts[loss_name][scenario_id]
             weight_trajectory_data = artifact.get("weight_trajectory_data")
             if not isinstance(weight_trajectory_data, dict):
@@ -328,6 +339,8 @@ def _rebuild_monitoring_holdout_backtest_directory(
             }
 
         overview_path = _monitoring_holdout_backtest_overview_path(output_dir, scenario_id)
+        if interrupt_checker is not None:
+            interrupt_checker()
         render_monitoring_multi_loss_weight_trajectory_overview_chart(
             epoch=epoch,
             scenario_id=scenario_id,
@@ -335,11 +348,15 @@ def _rebuild_monitoring_holdout_backtest_directory(
             output_path=overview_path,
             loss_order=resolved_loss_order,
         )
+        if interrupt_checker is not None:
+            interrupt_checker()
         overview_path_str = str(overview_path)
         generated_paths.append(overview_path_str)
         overview_path_by_scenario[scenario_id] = overview_path_str
 
     for loss_name, (manifest_path, payload) in selected_manifest_payloads.items():
+        if interrupt_checker is not None:
+            interrupt_checker()
         if _update_monitoring_manifest_overview_paths(
             payload,
             overview_path_by_scenario=overview_path_by_scenario,
@@ -364,7 +381,10 @@ def rebuild_monitoring_holdout_backtest_overviews(
     output_dirs: list[Path] | None = None,
     loss_order: list[str] | tuple[str, ...] | None = None,
     existing_only: bool = False,
+    interrupt_checker: Callable[[], None] | None = None,
 ) -> list[str]:
+    if interrupt_checker is not None:
+        interrupt_checker()
     if output_dirs is None:
         if state is None:
             raise ValueError("state is required when output_dirs is not provided.")
@@ -382,6 +402,8 @@ def rebuild_monitoring_holdout_backtest_overviews(
 
     generated_paths: list[str] = []
     for output_dir in resolved_output_dirs:
+        if interrupt_checker is not None:
+            interrupt_checker()
         if not output_dir.exists():
             continue
         if existing_only and not evaluation_shared.monitoring_output_dir_has_existing_overview_png(
@@ -397,6 +419,7 @@ def rebuild_monitoring_holdout_backtest_overviews(
                 state=resolved_state,
                 output_dir=output_dir,
                 loss_order=loss_order,
+                interrupt_checker=interrupt_checker,
             )
         )
     return generated_paths

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import torch
 from torch.utils.data import DataLoader
@@ -127,6 +127,7 @@ def _collect_single_scenario_rolling_one_step_outputs(
     lookback_days: int,
     evaluation_label: str,
     collect_weights: bool = True,
+    interrupt_checker: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     scenario_ids = raw_batch.get("scenario_id")
     source_paths = raw_batch.get("source_path")
@@ -178,7 +179,11 @@ def _collect_single_scenario_rolling_one_step_outputs(
     portfolio_returns_by_day: list[torch.Tensor] = []
     stock_weights_by_day: list[torch.Tensor] = []
     cash_weights_by_day: list[torch.Tensor] = []
+    if interrupt_checker is not None:
+        interrupt_checker()
     for scored_position in scored_positions.tolist():
+        if interrupt_checker is not None:
+            interrupt_checker()
         window_start = int(scored_position) - resolved_lookback_days
         window_stop = int(scored_position) + 1
         if window_start < 0:
@@ -231,6 +236,8 @@ def _collect_single_scenario_rolling_one_step_outputs(
                 )
             stock_weights_by_day.append(stock_weights[:, -1, :].detach().cpu().squeeze(0))
             cash_weights_by_day.append(cash_weights[:, -1].detach().cpu().squeeze(0))
+        if interrupt_checker is not None:
+            interrupt_checker()
 
     scored_target_time_indices = full_target_time_indices_cpu[score_mask_cpu]
     last_scored_position = int(scored_positions[-1].item())
@@ -272,6 +279,7 @@ def _collect_single_holdout_scenario_payload(
     loss_name: str,
     evaluation_config: EvaluationConfig,
     checkpoint: dict[str, Any],
+    interrupt_checker: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     rolling_outputs = _collect_single_scenario_rolling_one_step_outputs(
         model=model,
@@ -281,6 +289,7 @@ def _collect_single_holdout_scenario_payload(
         lookback_days=int(dataset.metadata.lookback_days),
         evaluation_label="Holdout rolling evaluation",
         collect_weights=True,
+        interrupt_checker=interrupt_checker,
     )
     return build_per_scenario_payload(
         scenario_id=str(rolling_outputs["scenario_id"]),
@@ -313,12 +322,17 @@ def _collect_holdout_per_scenario_payloads(
     loss_name: str,
     evaluation_config: EvaluationConfig,
     checkpoint: dict[str, Any],
+    interrupt_checker: Callable[[], None] | None = None,
 ) -> list[dict[str, Any]]:
     per_scenario_payloads: list[dict[str, Any]] = []
     was_training = model.training
     model.eval()
     try:
+        if interrupt_checker is not None:
+            interrupt_checker()
         for raw_batch in holdout_loader:
+            if interrupt_checker is not None:
+                interrupt_checker()
             per_scenario_payloads.append(
                 _collect_single_holdout_scenario_payload(
                     model=model,
@@ -328,8 +342,11 @@ def _collect_holdout_per_scenario_payloads(
                     loss_name=loss_name,
                     evaluation_config=evaluation_config,
                     checkpoint=checkpoint,
+                    interrupt_checker=interrupt_checker,
                 )
             )
+            if interrupt_checker is not None:
+                interrupt_checker()
     finally:
         model.train(was_training)
 

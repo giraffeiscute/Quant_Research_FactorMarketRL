@@ -533,12 +533,10 @@ def _run_post_training_holdout_after_fit(
     datamodule: LightningTrainDataModule,
     holdout_runner: Callable[..., list[tuple[int, str]]] | None = None,
 ) -> None:
-    if not trainer.is_global_zero:
-        return
-
     completed_epochs = int(checkpoint_callback.latest_completed_epoch)
     if completed_epochs <= 0:
-        _emit_lightning_console_message("Skipping post-training holdout: no completed epochs were detected.")
+        if trainer.is_global_zero:
+            _emit_lightning_console_message("Skipping post-training holdout: no completed epochs were detected.")
         return
 
     if holdout_runner is None:
@@ -549,17 +547,111 @@ def _run_post_training_holdout_after_fit(
     else:
         holdout_runner_impl = holdout_runner
 
-    _emit_lightning_console_message(
-        f"Starting post-training holdout evaluation up to completed_epoch={completed_epochs}."
+    if trainer.is_global_zero:
+        _emit_lightning_console_message(
+            f"Starting post-training holdout evaluation up to completed_epoch={completed_epochs}."
+        )
+    holdout_kwargs = {
+        "paths": paths,
+        "data_config": data_config,
+        "model_config": model_config,
+        "train_config": train_config,
+        "max_epoch": completed_epochs,
+        "devices": int(getattr(trainer, "world_size", 1) or 1),
+        "datamodule": datamodule,
+        "interrupt_checker": _INTERRUPT_CONTROLLER.raise_if_interrupted,
+    }
+    try:
+        holdout_runner_impl(**holdout_kwargs)
+    except TypeError as exc:
+        if "devices" not in str(exc):
+            raise
+        holdout_kwargs.pop("devices", None)
+        holdout_runner_impl(**holdout_kwargs)
+
+
+def _state_transition_barrier(*, trainer: pl.Trainer, barrier_name: str) -> None:
+    resolved_world_size = int(getattr(trainer, "world_size", 1) or 1)
+    if resolved_world_size <= 1:
+        return
+
+    strategy = getattr(trainer, "strategy", None)
+    strategy_barrier = getattr(strategy, "barrier", None)
+    if callable(strategy_barrier):
+        try:
+            strategy_barrier(barrier_name)
+        except TypeError:
+            strategy_barrier()
+        return
+
+    if not torch.distributed.is_available():
+        return
+    if not torch.distributed.is_initialized():
+        return
+    torch.distributed.barrier()
+
+
+def _sync_bool_flag_across_ranks(*, trainer: pl.Trainer, flag: bool) -> bool:
+    resolved_world_size = int(getattr(trainer, "world_size", 1) or 1)
+    if resolved_world_size <= 1:
+        return bool(flag)
+
+    if not torch.distributed.is_available():
+        return bool(flag)
+    if not torch.distributed.is_initialized():
+        return bool(flag)
+
+    tensor_device = torch.device("cpu")
+    if torch.cuda.is_available():
+        tensor_device = torch.device("cuda", torch.cuda.current_device())
+    sync_tensor = torch.tensor(1 if bool(flag) else 0, device=tensor_device, dtype=torch.int32)
+    torch.distributed.all_reduce(sync_tensor, op=torch.distributed.ReduceOp.MAX)
+    return bool(int(sync_tensor.item()))
+
+
+def _run_post_training_holdout_after_fit_with_barriers(
+    *,
+    trainer: pl.Trainer,
+    checkpoint_callback: ConfigEpochCheckpointCallback,
+    paths: PathsConfig,
+    data_config: DataConfig,
+    model_config: ModelConfig,
+    train_config: TrainConfig,
+    datamodule: LightningTrainDataModule,
+    holdout_runner: Callable[..., list[tuple[int, str]]] | None = None,
+) -> None:
+    _state_transition_barrier(
+        trainer=trainer,
+        barrier_name="before_post_training_holdout",
     )
-    holdout_runner_impl(
-        paths=paths,
-        data_config=data_config,
-        model_config=model_config,
-        train_config=train_config,
-        max_epoch=completed_epochs,
-        datamodule=datamodule,
+    holdout_exc: BaseException | None = None
+    try:
+        _run_post_training_holdout_after_fit(
+            trainer=trainer,
+            checkpoint_callback=checkpoint_callback,
+            paths=paths,
+            data_config=data_config,
+            model_config=model_config,
+            train_config=train_config,
+            datamodule=datamodule,
+            holdout_runner=holdout_runner,
+        )
+    except BaseException as exc:  # noqa: BLE001
+        holdout_exc = exc
+    finally:
+        _state_transition_barrier(
+            trainer=trainer,
+            barrier_name="after_post_training_holdout",
+        )
+
+    holdout_failed = _sync_bool_flag_across_ranks(
+        trainer=trainer,
+        flag=(holdout_exc is not None),
     )
+    if holdout_failed:
+        if holdout_exc is not None:
+            raise holdout_exc
+        raise RuntimeError("Post-training holdout failed on another DDP rank.")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -785,7 +877,7 @@ def _run_single_state(args: argparse.Namespace) -> None:
     if _trainer_was_interrupted(trainer):
         raise KeyboardInterrupt("Trainer interrupted by user signal.")
     _INTERRUPT_CONTROLLER.raise_if_interrupted()
-    _run_post_training_holdout_after_fit(
+    _run_post_training_holdout_after_fit_with_barriers(
         trainer=trainer,
         checkpoint_callback=config_epoch_checkpoint_callback,
         paths=paths,

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import re
 import signal
-from typing import Any
+from typing import Any, Callable
 
 import pytorch_lightning as pl
 import torch
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 if __package__ is None or __package__ == "":
     import sys
@@ -17,7 +20,17 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from portfolio_attention import artifact_paths
     from portfolio_attention.config import EvaluationConfig
-    from portfolio_attention.evaluation_monitoring import run_monitoring_holdout_backtest
+    from portfolio_attention.evaluation_artifacts import build_per_scenario_payload
+    from portfolio_attention.evaluation_monitoring import (
+        run_monitoring_holdout_backtest_from_per_scenario_payloads,
+    )
+    from portfolio_attention.evaluation_runtime import (
+        EVALUATION_PRICE_ANCHOR_MODE_PER_WINDOW,
+        ROLLING_ONE_STEP_EVALUATION_MODE,
+        ROLLING_ONE_STEP_HORIZON_DAYS,
+        ROLLING_ONE_STEP_STRIDE_DAYS,
+        _collect_single_scenario_rolling_one_step_outputs,
+    )
     from portfolio_attention.lightning_train import (
         LightningTrainDataModule,
         PortfolioLightningModule,
@@ -30,11 +43,21 @@ if __package__ is None or __package__ == "":
         resolve_runtime_configs_from_args,
     )
     from portfolio_attention.train_monitoring import resolve_monitoring_holdout_backtest_epochs
-    from portfolio_attention.utils import resolve_device, set_seed
+    from portfolio_attention.utils import set_seed
 else:
     from . import artifact_paths
     from .config import EvaluationConfig
-    from .evaluation_monitoring import run_monitoring_holdout_backtest
+    from .evaluation_artifacts import build_per_scenario_payload
+    from .evaluation_monitoring import (
+        run_monitoring_holdout_backtest_from_per_scenario_payloads,
+    )
+    from .evaluation_runtime import (
+        EVALUATION_PRICE_ANCHOR_MODE_PER_WINDOW,
+        ROLLING_ONE_STEP_EVALUATION_MODE,
+        ROLLING_ONE_STEP_HORIZON_DAYS,
+        ROLLING_ONE_STEP_STRIDE_DAYS,
+        _collect_single_scenario_rolling_one_step_outputs,
+    )
     from .lightning_train import (
         LightningTrainDataModule,
         PortfolioLightningModule,
@@ -47,9 +70,36 @@ else:
         resolve_runtime_configs_from_args,
     )
     from .train_monitoring import resolve_monitoring_holdout_backtest_epochs
-    from .utils import resolve_device, set_seed
+    from .utils import set_seed
 
-def _emit_holdout_console_message(message: str) -> None:
+def _resolve_env_global_rank() -> int | None:
+    raw_rank = os.environ.get("RANK")
+    if raw_rank is not None:
+        try:
+            return int(raw_rank)
+        except ValueError:
+            return None
+    raw_local_rank = os.environ.get("LOCAL_RANK")
+    if raw_local_rank is not None:
+        try:
+            return int(raw_local_rank)
+        except ValueError:
+            return None
+    return None
+
+
+def _is_global_rank_zero_process() -> bool:
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        return int(torch.distributed.get_rank()) == 0
+    env_rank = _resolve_env_global_rank()
+    if env_rank is None:
+        return True
+    return int(env_rank) == 0
+
+
+def _emit_holdout_console_message(message: str, *, rank_zero_only: bool = True) -> None:
+    if rank_zero_only and not _is_global_rank_zero_process():
+        return
     print(f"[lightning_holdout_test] {message}", flush=True)
 
 
@@ -136,9 +186,276 @@ def _destroy_distributed_process_group_if_initialized() -> None:
         return
 
 
+def _exception_represents_interrupt(exc: BaseException) -> bool:
+    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        return True
+    text = " ".join(str(exc).split()).lower()
+    if "keyboardinterrupt" in text:
+        return True
+    if "terminated with code 130" in text:
+        return True
+    return False
+
+
+class HoldoutPredictionModule(pl.LightningModule):
+    """Prediction-only wrapper that emits legacy per-scenario payloads."""
+
+    def __init__(
+        self,
+        *,
+        base_lightning_module: PortfolioLightningModule,
+        dataset,
+        checkpoint: dict[str, Any],
+        loss_name: str,
+        evaluation_config: EvaluationConfig,
+        interrupt_checker: Callable[[], None] | None = None,
+    ) -> None:
+        super().__init__()
+        self.model = base_lightning_module.model
+        self.dataset = dataset
+        self.checkpoint = checkpoint
+        self.loss_name = str(loss_name)
+        self.evaluation_config = evaluation_config
+        self.interrupt_checker = interrupt_checker
+
+    def _raise_if_interrupted(self) -> None:
+        if self.interrupt_checker is None:
+            return
+        self.interrupt_checker()
+
+    def predict_step(
+        self,
+        batch: dict[str, Any],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> dict[str, Any]:
+        del batch_idx, dataloader_idx
+        self._raise_if_interrupted()
+        rolling_outputs = _collect_single_scenario_rolling_one_step_outputs(
+            model=self.model,
+            dataset=self.dataset,
+            raw_batch=batch,
+            device=self.device,
+            lookback_days=int(self.dataset.metadata.lookback_days),
+            evaluation_label="Holdout distributed rolling evaluation",
+            collect_weights=True,
+            interrupt_checker=self.interrupt_checker,
+        )
+        payload = build_per_scenario_payload(
+            scenario_id=str(rolling_outputs["scenario_id"]),
+            source_path=Path(str(rolling_outputs["source_path"])),
+            loss_name=self.loss_name,
+            checkpoint=self.checkpoint,
+            context_target_time_indices=rolling_outputs["context_target_time_indices"],
+            target_time_indices=rolling_outputs["scored_target_time_indices"],
+            portfolio_returns=rolling_outputs["portfolio_returns"],
+            stock_weights=rolling_outputs["stock_weights"],
+            cash_weights=rolling_outputs["cash_weights"],
+            dataset=self.dataset,
+            evaluation_config=self.evaluation_config,
+            warmup_time_steps=int(rolling_outputs["lookback_days"]),
+            evaluation_mode=ROLLING_ONE_STEP_EVALUATION_MODE,
+            rolling_window_lookback_days=int(rolling_outputs["lookback_days"]),
+            rolling_window_horizon_days=ROLLING_ONE_STEP_HORIZON_DAYS,
+            rolling_window_stride_days=ROLLING_ONE_STEP_STRIDE_DAYS,
+            num_rolling_windows=int(rolling_outputs["num_rolling_windows"]),
+            evaluation_price_anchor_mode=EVALUATION_PRICE_ANCHOR_MODE_PER_WINDOW,
+        )
+        self._raise_if_interrupted()
+        return payload
+
+
+def _resolve_requested_devices(devices: int | None) -> int:
+    if devices is None:
+        return 1
+    resolved_devices = int(devices)
+    if resolved_devices <= 0:
+        raise ValueError("--devices must be positive.")
+    return resolved_devices
+
+
+def _build_prediction_trainer(
+    *,
+    train_config,
+    requested_devices: int,
+) -> pl.Trainer:
+    requested_device_name = str(getattr(train_config, "device", "auto")).strip().lower()
+    prefers_gpu = requested_device_name in {"auto", "cuda"} and torch.cuda.is_available()
+    dist_initialized = torch.distributed.is_available() and torch.distributed.is_initialized()
+    dist_world_size = int(torch.distributed.get_world_size()) if dist_initialized else 1
+
+    accelerator = "cpu"
+    strategy: str = "auto"
+    trainer_devices: int | list[int] = 1
+
+    if prefers_gpu:
+        accelerator = "gpu"
+        available_gpus = int(torch.cuda.device_count())
+        if dist_initialized and dist_world_size > 1:
+            # Reuse externally launched distributed ranks (e.g., post-fit holdout in existing DDP workers).
+            # Avoid re-initializing nested DDP process groups in this mode.
+            trainer_devices = [int(torch.cuda.current_device())]
+            strategy = "auto"
+        else:
+            if requested_devices > available_gpus:
+                raise ValueError(
+                    f"Requested devices={requested_devices}, but only {available_gpus} CUDA device(s) are available."
+                )
+            trainer_devices = requested_devices
+            strategy = "ddp" if requested_devices > 1 else "auto"
+
+    trainer = pl.Trainer(
+        accelerator=accelerator,
+        devices=trainer_devices,
+        strategy=strategy,
+        logger=False,
+        enable_checkpointing=False,
+        inference_mode=True,
+        enable_progress_bar=True,
+    )
+    return trainer
+
+
+def _flatten_prediction_outputs(predictions: Any) -> list[dict[str, Any]]:
+    if predictions is None:
+        return []
+    if isinstance(predictions, dict):
+        return [predictions]
+    if isinstance(predictions, (list, tuple)):
+        flattened: list[dict[str, Any]] = []
+        for item in predictions:
+            flattened.extend(_flatten_prediction_outputs(item))
+        return flattened
+    raise RuntimeError(
+        "Distributed prediction returned an unexpected payload container type: "
+        f"{type(predictions)!r}."
+    )
+
+
+def _gather_prediction_payloads(
+    *,
+    local_payloads: list[dict[str, Any]],
+    trainer: pl.Trainer,
+) -> list[dict[str, Any]]:
+    dist_initialized = torch.distributed.is_available() and torch.distributed.is_initialized()
+    world_size = int(torch.distributed.get_world_size()) if dist_initialized else int(
+        getattr(trainer, "world_size", 1) or 1
+    )
+    if world_size <= 1:
+        return list(local_payloads)
+    if not dist_initialized:
+        if _is_global_rank_zero_process():
+            return list(local_payloads)
+        return []
+
+    gathered_objects: list[Any] = [None for _ in range(world_size)]
+    try:
+        torch.distributed.all_gather_object(gathered_objects, list(local_payloads))
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("Distributed prediction result gathering failed.") from exc
+
+    merged_payloads: list[dict[str, Any]] = []
+    for rank_payloads in gathered_objects:
+        if rank_payloads is None:
+            continue
+        if not isinstance(rank_payloads, list):
+            raise RuntimeError("Distributed prediction gather produced a non-list rank payload.")
+        for payload in rank_payloads:
+            if not isinstance(payload, dict):
+                raise RuntimeError("Distributed prediction gather produced a non-dict scenario payload.")
+            merged_payloads.append(payload)
+    return merged_payloads
+
+
+def _order_and_validate_prediction_payloads(
+    *,
+    gathered_payloads: list[dict[str, Any]],
+    dataset,
+    expected_scenario_count: int,
+) -> list[dict[str, Any]]:
+    deduped_by_scenario_id: dict[str, dict[str, Any]] = {}
+    for payload in gathered_payloads:
+        raw_scenario_id = payload.get("scenario_id")
+        if raw_scenario_id in {None, ""}:
+            raise RuntimeError("Distributed prediction payload is missing scenario_id.")
+        scenario_id = str(raw_scenario_id)
+        if scenario_id not in deduped_by_scenario_id:
+            deduped_by_scenario_id[scenario_id] = payload
+
+    expected_order = [str(item) for item in list(dataset.metadata.test_scenarios)]
+    missing_ids = [scenario_id for scenario_id in expected_order if scenario_id not in deduped_by_scenario_id]
+    if missing_ids:
+        raise RuntimeError(
+            "Distributed prediction did not produce payloads for every holdout scenario. "
+            f"Missing scenario_ids={missing_ids}."
+        )
+
+    extra_ids = sorted(
+        scenario_id for scenario_id in deduped_by_scenario_id if scenario_id not in set(expected_order)
+    )
+    if extra_ids:
+        raise RuntimeError(
+            "Distributed prediction produced unexpected holdout scenario payloads. "
+            f"Unexpected scenario_ids={extra_ids}."
+        )
+
+    ordered_payloads = [deduped_by_scenario_id[scenario_id] for scenario_id in expected_order]
+    if len(ordered_payloads) != int(expected_scenario_count):
+        raise RuntimeError(
+            "Distributed prediction payload count mismatch after deduplication. "
+            f"expected={int(expected_scenario_count)} actual={len(ordered_payloads)}."
+        )
+    return ordered_payloads
+
+
+def _sync_bool_flag_across_ranks(flag: bool) -> bool:
+    if not torch.distributed.is_available():
+        return bool(flag)
+    if not torch.distributed.is_initialized():
+        return bool(flag)
+    tensor_device = torch.device("cpu")
+    if torch.cuda.is_available():
+        tensor_device = torch.device("cuda", torch.cuda.current_device())
+    sync_tensor = torch.tensor(1 if bool(flag) else 0, device=tensor_device, dtype=torch.int32)
+    torch.distributed.all_reduce(sync_tensor, op=torch.distributed.ReduceOp.MAX)
+    return bool(int(sync_tensor.item()))
+
+
+def _build_prediction_dataloader(datamodule: LightningTrainDataModule) -> DataLoader:
+    if datamodule.test_dataset is None:
+        raise RuntimeError("test_dataset is unavailable before building holdout prediction dataloader.")
+    sampler = None
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        world_size = int(torch.distributed.get_world_size())
+        rank = int(torch.distributed.get_rank())
+        sampler = DistributedSampler(
+            datamodule.test_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=False,
+            drop_last=False,
+        )
+    return DataLoader(
+        datamodule.test_dataset,
+        batch_size=1,
+        shuffle=False,
+        sampler=sampler,
+        num_workers=int(datamodule.num_workers),
+        pin_memory=True,
+        persistent_workers=False,
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = build_arg_parser()
     parser.description = "Run post-training holdout monitoring from config-selected Lightning checkpoints."
+    if not any(getattr(action, "dest", None) == "devices" for action in parser._actions):
+        parser.add_argument(
+            "--devices",
+            type=int,
+            default=1,
+            help="Number of local GPUs to use for holdout prediction when running standalone.",
+        )
     return parser
 
 
@@ -159,6 +476,9 @@ def _validate_cli_args(args: argparse.Namespace) -> None:
     if args_dict.get("resume_checkpoints") is not None:
         raise ValueError("lightning_holdout_test.py does not support --resume-checkpoints.")
 
+    if int(args_dict.get("devices", 1)) <= 0:
+        raise ValueError("--devices must be positive.")
+
 
 def run_post_training_holdout(
     *,
@@ -167,9 +487,12 @@ def run_post_training_holdout(
     model_config,
     train_config,
     max_epoch: int,
+    devices: int | None = None,
     datamodule: LightningTrainDataModule | None = None,
+    interrupt_checker: Callable[[], None] | None = None,
 ) -> list[tuple[int, str]]:
-    _INTERRUPT_CONTROLLER.raise_if_interrupted()
+    resolved_interrupt_checker = interrupt_checker or _INTERRUPT_CONTROLLER.raise_if_interrupted
+    resolved_interrupt_checker()
     if not train_config.loss_name:
         raise ValueError("lightning_holdout_test.py requires a single --loss.")
 
@@ -186,12 +509,12 @@ def run_post_training_holdout(
     resolved_datamodule = datamodule or LightningTrainDataModule(
         data_config=data_config,
         num_workers=0,
-        interrupt_checker=_INTERRUPT_CONTROLLER.raise_if_interrupted,
+        interrupt_checker=resolved_interrupt_checker,
     )
     _emit_holdout_console_message("Starting scenario splitting and dataset materialization.")
-    _INTERRUPT_CONTROLLER.raise_if_interrupted()
+    resolved_interrupt_checker()
     resolved_datamodule.build_datasets()
-    _INTERRUPT_CONTROLLER.raise_if_interrupted()
+    resolved_interrupt_checker()
     _emit_holdout_console_message("Finished scenario splitting and dataset materialization.")
 
     if resolved_datamodule.dataset is None:
@@ -202,12 +525,35 @@ def run_post_training_holdout(
         raise RuntimeError("Holdout evaluation requires a non-empty holdout test split.")
 
     evaluation_config = EvaluationConfig()
-    device = resolve_device(str(train_config.device))
-    _emit_holdout_console_message(f"Using runtime device: {device}")
+    requested_devices = _resolve_requested_devices(devices)
+    trainer = _build_prediction_trainer(
+        train_config=train_config,
+        requested_devices=requested_devices,
+    )
+    resolved_strategy = str(getattr(trainer, "strategy", "auto"))
+    local_num_devices = int(getattr(trainer, "num_devices", requested_devices) or requested_devices)
+    _emit_holdout_console_message(
+        "Configured distributed prediction runtime: "
+        f"accelerator={trainer.accelerator.__class__.__name__} "
+        f"requested_devices={requested_devices} "
+        f"local_devices={local_num_devices} "
+        f"strategy={resolved_strategy}"
+    )
+    _emit_holdout_console_message(
+        f"Selected holdout epochs for evaluation: {list(configured_epochs)}."
+    )
 
+    holdout_dataloader = _build_prediction_dataloader(resolved_datamodule)
+    checkpoint_metadata = {
+        "train_config": {"loss_name": str(train_config.loss_name)},
+        "data_config": {
+            "train_batch_size": int(resolved_datamodule.dataset.metadata.train_batch_size),
+        },
+    }
+    rank_is_global_zero = _is_global_rank_zero_process()
     completed_runs: list[tuple[int, str]] = []
     for epoch in configured_epochs:
-        _INTERRUPT_CONTROLLER.raise_if_interrupted()
+        resolved_interrupt_checker()
         checkpoint_path = artifact_paths.lightning_epoch_checkpoint_path(
             paths,
             train_config.loss_name,
@@ -220,9 +566,11 @@ def run_post_training_holdout(
                 f"epoch={int(epoch)} expected_path={checkpoint_path}"
             )
 
-        _emit_holdout_console_message(f"Running holdout monitoring for epoch {int(epoch)}.")
+        _emit_holdout_console_message(
+            f"Starting distributed holdout prediction for epoch {int(epoch)}."
+        )
         load_kwargs = dict(
-            map_location=device,
+            map_location=torch.device("cpu"),
             data_config=data_config,
             model_config=model_config,
             train_config=train_config,
@@ -264,29 +612,79 @@ def run_post_training_holdout(
                     f"Original error: {exc}"
                 ) from exc
 
-        lightning_module.to(device)
-        lightning_module.eval()
-
-        with torch.no_grad():
-            monitoring_backtest = run_monitoring_holdout_backtest(
-                model=lightning_module.model,
+        epoch_exception: BaseException | None = None
+        ordered_payloads: list[dict[str, Any]] | None = None
+        try:
+            prediction_module = HoldoutPredictionModule(
+                base_lightning_module=lightning_module,
                 dataset=resolved_datamodule.dataset,
-                holdout_dataset=resolved_datamodule.test_dataset,
-                loss_name=train_config.loss_name,
+                checkpoint=checkpoint_metadata,
+                loss_name=str(train_config.loss_name),
+                evaluation_config=evaluation_config,
+                interrupt_checker=resolved_interrupt_checker,
+            )
+            prediction_outputs = trainer.predict(
+                model=prediction_module,
+                dataloaders=holdout_dataloader,
+                return_predictions=True,
+            )
+            resolved_interrupt_checker()
+            local_payloads = _flatten_prediction_outputs(prediction_outputs)
+            gathered_payloads = _gather_prediction_payloads(
+                local_payloads=local_payloads,
+                trainer=trainer,
+            )
+            if rank_is_global_zero:
+                _emit_holdout_console_message(
+                    f"Prediction complete for epoch {int(epoch)}. "
+                    f"gathered_payloads={len(gathered_payloads)}",
+                )
+                ordered_payloads = _order_and_validate_prediction_payloads(
+                    gathered_payloads=gathered_payloads,
+                    dataset=resolved_datamodule.dataset,
+                    expected_scenario_count=len(resolved_datamodule.test_dataset),
+                )
+        except BaseException as exc:  # noqa: BLE001
+            if _exception_represents_interrupt(exc):
+                raise KeyboardInterrupt("Holdout monitoring interrupted by user signal.") from exc
+            epoch_exception = exc
+
+        epoch_failed = _sync_bool_flag_across_ranks(epoch_exception is not None)
+        if epoch_failed:
+            if epoch_exception is not None:
+                raise epoch_exception
+            raise RuntimeError(
+                f"Distributed holdout prediction failed on another rank for epoch {int(epoch)}."
+            )
+
+        if rank_is_global_zero:
+            if ordered_payloads is None:
+                raise RuntimeError(
+                    f"Rank 0 did not produce gathered holdout payloads for epoch {int(epoch)}."
+                )
+            resolved_interrupt_checker()
+            _emit_holdout_console_message(
+                f"Starting rank0 backtest/output writing for epoch {int(epoch)}."
+            )
+            monitoring_backtest = run_monitoring_holdout_backtest_from_per_scenario_payloads(
+                per_scenario_payloads=ordered_payloads,
+                dataset=resolved_datamodule.dataset,
+                loss_name=str(train_config.loss_name),
                 epoch=int(epoch),
                 paths=paths,
-                device=device,
+                evaluation_config=evaluation_config,
                 data_config=data_config,
                 model_config=model_config,
                 train_config=train_config,
+                interrupt_checker=resolved_interrupt_checker,
             )
-        _INTERRUPT_CONTROLLER.raise_if_interrupted()
-        output_dir = str(monitoring_backtest["holdout_backtest_output_dir"])
-        completed_runs.append((int(epoch), output_dir))
-        _emit_holdout_console_message(
-            f"Completed holdout monitoring for epoch {int(epoch)}. output_dir={output_dir}"
-        )
-
+            output_dir = str(monitoring_backtest["holdout_backtest_output_dir"])
+            completed_runs.append((int(epoch), output_dir))
+            _emit_holdout_console_message(
+                f"Completed holdout monitoring for epoch {int(epoch)}. output_dir={output_dir}"
+            )
+    if not rank_is_global_zero:
+        return []
     _emit_holdout_console_message(
         "Post-training holdout evaluation summary: "
         f"requested_epochs={len(configured_epochs)} completed_runs={len(completed_runs)}"
@@ -316,6 +714,8 @@ def main() -> None:
             model_config=model_config,
             train_config=train_config,
             max_epoch=int(train_config.num_epochs),
+            devices=int(args.devices),
+            interrupt_checker=_INTERRUPT_CONTROLLER.raise_if_interrupted,
         )
     except KeyboardInterrupt:
         _destroy_distributed_process_group_if_initialized()

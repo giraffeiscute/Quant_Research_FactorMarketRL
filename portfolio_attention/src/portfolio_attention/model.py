@@ -478,7 +478,7 @@ class PortfolioAttentionModel(nn.Module):
         allocation_logits: torch.Tensor,
         num_stocks: int,
         initial_allocation: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if allocation_logits.ndim != 3:
             raise ValueError("allocation_logits must have shape [S, T, N+1].")
         num_scenarios, time_steps, total_assets = allocation_logits.shape
@@ -505,21 +505,45 @@ class PortfolioAttentionModel(nn.Module):
         raw_allocations: list[torch.Tensor] = []
         allocations: list[torch.Tensor] = []
         turnovers: list[torch.Tensor] = []
+        allocation_change_l2_values: list[torch.Tensor] = []
         for time_index in range(time_steps):
             logits_t = allocation_logits[:, time_index, :]
             raw_t = torch.softmax(logits_t, dim=-1)
             allocation_t = alpha * raw_t + (1.0 - alpha) * prev_weight
-            turnover_t = 0.5 * torch.abs(allocation_t - prev_weight).sum(dim=-1)
+            allocation_delta_t = allocation_t - prev_weight
+            turnover_t = 0.5 * torch.abs(allocation_delta_t).sum(dim=-1)
+            allocation_change_l2_t = allocation_delta_t.pow(2).sum(dim=-1)
             raw_allocations.append(raw_t)
             allocations.append(allocation_t)
             turnovers.append(turnover_t)
+            allocation_change_l2_values.append(allocation_change_l2_t)
             prev_weight = allocation_t
 
         return (
             torch.stack(raw_allocations, dim=1),
             torch.stack(allocations, dim=1),
             torch.stack(turnovers, dim=1),
+            torch.stack(allocation_change_l2_values, dim=1),
         )
+
+    @staticmethod
+    def _allocation_change_l2_from_allocation(
+        allocation: torch.Tensor,
+        *,
+        initial_allocation: torch.Tensor,
+    ) -> torch.Tensor:
+        if allocation.ndim != 3:
+            raise ValueError("allocation must have shape [S, T, N+1].")
+        if initial_allocation.shape != (allocation.shape[0], allocation.shape[2]):
+            raise ValueError(
+                "initial_allocation must have shape [S, N+1]. "
+                f"Received {tuple(initial_allocation.shape)} expected {(allocation.shape[0], allocation.shape[2])}."
+            )
+        prev_allocation = torch.cat(
+            [initial_allocation.unsqueeze(1), allocation[:, :-1, :]],
+            dim=1,
+        )
+        return (allocation - prev_allocation).pow(2).sum(dim=-1)
 
     def _score_stock_allocation(
         self,
@@ -663,6 +687,7 @@ class PortfolioAttentionModel(nn.Module):
         raw_allocations_by_step: list[torch.Tensor] = []
         allocations_by_step: list[torch.Tensor] = []
         turnovers_by_step: list[torch.Tensor] = []
+        allocation_change_l2_by_step: list[torch.Tensor] = []
         for time_index in range(time_steps):
             attended_stock_t = attended_stock[:, time_index, :, :]
             stock_state_input = torch.cat(
@@ -680,13 +705,16 @@ class PortfolioAttentionModel(nn.Module):
             allocation_logits_t = torch.cat([stock_logit_t, cash_logit_t.unsqueeze(-1)], dim=-1)
             raw_t = torch.softmax(allocation_logits_t, dim=-1)
             allocation_t = alpha * raw_t + (1.0 - alpha) * prev_weight
-            turnover_t = 0.5 * torch.abs(allocation_t - prev_weight).sum(dim=-1)
+            allocation_delta_t = allocation_t - prev_weight
+            turnover_t = 0.5 * torch.abs(allocation_delta_t).sum(dim=-1)
+            allocation_change_l2_t = allocation_delta_t.pow(2).sum(dim=-1)
 
             stock_logits_by_step.append(stock_logit_t)
             cash_logit_by_step.append(cash_logit_t)
             raw_allocations_by_step.append(raw_t)
             allocations_by_step.append(allocation_t)
             turnovers_by_step.append(turnover_t)
+            allocation_change_l2_by_step.append(allocation_change_l2_t)
             prev_weight = allocation_t
         stock_logits = torch.stack(stock_logits_by_step, dim=1)
         cash_logit = torch.stack(cash_logit_by_step, dim=1)
@@ -694,6 +722,7 @@ class PortfolioAttentionModel(nn.Module):
             torch.stack(raw_allocations_by_step, dim=1),
             torch.stack(allocations_by_step, dim=1),
             torch.stack(turnovers_by_step, dim=1),
+            torch.stack(allocation_change_l2_by_step, dim=1),
         )
         return (
             stock_logits,
@@ -796,13 +825,22 @@ class PortfolioAttentionModel(nn.Module):
 
         allocation_logits = torch.cat([stock_logits, cash_logit.unsqueeze(-1)], dim=-1)
         if precomputed_smoothing is None:
-            raw_allocation, allocation, turnover = self._smooth_allocation_from_logits(
+            raw_allocation, allocation, turnover, allocation_change_l2 = self._smooth_allocation_from_logits(
                 allocation_logits=allocation_logits,
                 num_stocks=num_stocks,
                 initial_allocation=initial_allocation,
             )
         else:
-            raw_allocation, allocation, turnover = precomputed_smoothing
+            if len(precomputed_smoothing) == 3:
+                raw_allocation, allocation, turnover = precomputed_smoothing
+                allocation_change_l2 = self._allocation_change_l2_from_allocation(
+                    allocation,
+                    initial_allocation=initial_allocation,
+                )
+            elif len(precomputed_smoothing) == 4:
+                raw_allocation, allocation, turnover, allocation_change_l2 = precomputed_smoothing
+            else:
+                raise ValueError("precomputed_smoothing must contain 3 or 4 tensors.")
         stock_weights = allocation[..., :-1]
         cash_weight = allocation[..., -1]
 
@@ -845,6 +883,7 @@ class PortfolioAttentionModel(nn.Module):
             "raw_allocation": raw_allocation,
             "allocation": allocation,
             "turnover": turnover,
+            "allocation_change_l2": allocation_change_l2,
             "portfolio_return": portfolio_return,
             "debug_info": debug_info,
         }

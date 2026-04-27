@@ -187,21 +187,33 @@ def _run_loss_step(
             "turnover must match portfolio_returns shape. "
             f"Received turnover={tuple(turnover.shape)} portfolio_returns={tuple(portfolio_returns.shape)}."
         )
+    allocation_change_l2 = outputs.get("allocation_change_l2")
+    if not isinstance(allocation_change_l2, torch.Tensor):
+        raise RuntimeError("Training batch requires model outputs to include allocation_change_l2 tensor.")
+    if allocation_change_l2.shape != portfolio_returns.shape:
+        raise ValueError(
+            "allocation_change_l2 must match portfolio_returns shape. "
+            f"Received allocation_change_l2={tuple(allocation_change_l2.shape)} "
+            f"portfolio_returns={tuple(portfolio_returns.shape)}."
+        )
     score_mask = batch.get("score_mask")
     if score_mask is None:
         scored_returns = portfolio_returns
         scored_turnover = turnover
+        scored_allocation_change_l2 = allocation_change_l2
     else:
         if not isinstance(score_mask, torch.Tensor):
             raise ValueError("score_mask must be a tensor when provided in the batch.")
         score_mask_bool = score_mask.to(dtype=torch.bool)
         scored_returns = apply_score_mask(portfolio_returns, score_mask_bool)
         scored_turnover = apply_score_mask(turnover, score_mask_bool)
+        scored_allocation_change_l2 = apply_score_mask(allocation_change_l2, score_mask_bool)
 
     loss = build_portfolio_objective_loss(
         loss_name,
         scored_returns,
         turnover=scored_turnover,
+        allocation_change_l2=scored_allocation_change_l2,
         turnover_penalty=turnover_penalty,
         transaction_cost_rate=transaction_cost_rate,
         turnover_penalty_norm=turnover_penalty_norm,

@@ -51,20 +51,46 @@ def _coerce_turnover(turnover: torch.Tensor | None, *, reference: torch.Tensor) 
     return turnover
 
 
+def _lagged_positive_cumulative_return_weight(portfolio_returns: torch.Tensor) -> torch.Tensor:
+    cumulative_returns = torch.cumprod(1 + portfolio_returns, dim=1) - 1
+    lagged_cumulative_returns = torch.zeros_like(cumulative_returns)
+    if cumulative_returns.shape[1] > 1:
+        lagged_cumulative_returns[:, 1:] = cumulative_returns[:, :-1]
+    return torch.relu(lagged_cumulative_returns).detach()
+
+
 def compute_turnover_penalty(
     turnover: torch.Tensor,
     *,
     norm: str = "l1",
+    portfolio_returns: torch.Tensor | None = None,
+    allocation_change_l2: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    scored_turnover = _coerce_turnover(turnover, reference=_coerce_portfolio_returns(turnover))
     resolved_norm = str(norm).strip().lower()
     if resolved_norm == "l1":
-        return turnover.abs().mean()
-    if resolved_norm == "l2":
-        return turnover.pow(2).mean()
-    raise ValueError(
-        "turnover_penalty_norm must be one of {'l1', 'l2'}, "
-        f"received {norm!r}."
-    )
+        regularizer = scored_turnover.abs()
+    elif resolved_norm == "l2":
+        if allocation_change_l2 is None:
+            raise ValueError("allocation_change_l2 is required when turnover_penalty_norm='l2'.")
+        regularizer = _coerce_turnover(allocation_change_l2, reference=scored_turnover)
+    else:
+        raise ValueError(
+            "turnover_penalty_norm must be one of {'l1', 'l2'}, "
+            f"received {norm!r}."
+        )
+
+    if portfolio_returns is None:
+        return regularizer.mean()
+
+    scored_returns = _coerce_portfolio_returns(portfolio_returns)
+    if tuple(scored_returns.shape) != tuple(scored_turnover.shape):
+        raise ValueError(
+            "portfolio_returns must match turnover shape when computing weighted turnover penalty. "
+            f"Received portfolio_returns={tuple(scored_returns.shape)} turnover={tuple(scored_turnover.shape)}."
+        )
+    weights = _lagged_positive_cumulative_return_weight(scored_returns)
+    return (weights * regularizer).mean()
 
 
 # 計算投資組合整段路徑的最終報酬損失，回傳負值供最小化。
@@ -256,6 +282,7 @@ def build_portfolio_objective_loss(
     name: str,
     portfolio_returns: torch.Tensor,
     turnover: torch.Tensor | None = None,
+    allocation_change_l2: torch.Tensor | None = None,
     turnover_penalty: float = 0.0,
     transaction_cost_rate: float = 0.0,
     turnover_penalty_norm: str = "l1",
@@ -279,6 +306,8 @@ def build_portfolio_objective_loss(
         turnover_regularizer = compute_turnover_penalty(
             scored_turnover,
             norm=turnover_penalty_norm,
+            portfolio_returns=objective_returns,
+            allocation_change_l2=allocation_change_l2,
         )
         loss = loss + resolved_turnover_penalty * turnover_regularizer
     return loss

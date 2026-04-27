@@ -12,7 +12,16 @@ import torch
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from portfolio_attention import artifact_paths, evaluate_rebuild, evaluation_pipeline
+    from portfolio_attention import (
+        artifact_paths,
+        evaluate_rebuild,
+        evaluation_artifacts,
+        evaluation_monitoring,
+        evaluation_pipeline,
+        evaluation_presentation,
+        evaluation_runtime,
+        evaluation_shared,
+    )
     from portfolio_attention.config import (
         DataConfig,
         ModelConfig,
@@ -25,7 +34,16 @@ if __package__ is None or __package__ == "":
         validated_model_config,
     )
 else:
-    from . import artifact_paths, evaluate_rebuild, evaluation_pipeline
+    from . import (
+        artifact_paths,
+        evaluate_rebuild,
+        evaluation_artifacts,
+        evaluation_monitoring,
+        evaluation_pipeline,
+        evaluation_presentation,
+        evaluation_runtime,
+        evaluation_shared,
+    )
     from .config import (
         DataConfig,
         ModelConfig,
@@ -50,6 +68,21 @@ TERMINAL_OUTPUT_KEYS = [
     "best_scenario_final_return",
     "best_scenario_id",
 ]
+
+# Legacy facade compatibility for root scripts.
+ROLLING_ONE_STEP_EVALUATION_MODE = evaluation_runtime.ROLLING_ONE_STEP_EVALUATION_MODE
+_compute_backtest_portfolio_sr = evaluation_artifacts._compute_backtest_portfolio_sr
+_extract_exported_train_config = evaluation_artifacts.extract_exported_train_config
+_get_aux_lookup = evaluation_presentation.get_aux_lookup
+_is_weight_above_threshold = evaluation_shared.is_weight_above_threshold
+_load_aux_frame = evaluation_presentation.load_aux_frame
+_validate_checkpoint_metadata = evaluation_pipeline._validate_checkpoint_metadata
+format_allocation_group_label = evaluation_presentation.format_allocation_group_label
+_normalize_overview_loss_order = evaluation_shared.normalize_overview_loss_order
+rebuild_monitoring_holdout_backtest_overviews = (
+    evaluate_rebuild.rebuild_monitoring_holdout_backtest_overviews
+)
+run_monitoring_holdout_backtest = evaluation_monitoring.run_monitoring_holdout_backtest
 
 
 def _resolve_checkpoint_state(data_config: DataConfig) -> str | None:
