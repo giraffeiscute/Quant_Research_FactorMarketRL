@@ -16,13 +16,13 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from portfolio_attention import artifact_paths, run_metadata
     from portfolio_attention.config import DataConfig, ModelConfig, PathsConfig, TrainConfig
-    from portfolio_attention.config_validation import (
+    from portfolio_attention.config.validation import (
         validated_data_config,
         validated_model_config,
         validated_train_config,
     )
     from portfolio_attention.dataset import PortfolioPanelDataset
-    from portfolio_attention.train_engine import (
+    from portfolio_attention.training.engine import (
         _append_dataset_split_summary,
         _build_validation_rolling_metadata,
         _log_reproducibility_status,
@@ -31,19 +31,19 @@ if __package__ is None or __package__ == "":
         _run_validation_epoch,
         build_dataset_bundle,
     )
-    from portfolio_attention.train_finalization import (
+    from portfolio_attention.training.finalization import (
         _epoch_candidate_checkpoint_path,
         _finalize_training_outputs,
         _normalize_best_epoch_selection_window,
         _save_training_checkpoint,
         _select_best_epoch_record,
     )
-    from portfolio_attention.train_monitoring import (
+    from portfolio_attention.training.monitoring import (
         _run_monitoring_holdout_backtest_epoch,
         _should_run_monitoring_holdout_backtest,
         _update_running_epoch_status,
     )
-    from portfolio_attention.train_status import (
+    from portfolio_attention.training.status import (
         TrainingStatusReporter,
         log_path_for_loss,
         write_training_status,
@@ -57,13 +57,13 @@ if __package__ is None or __package__ == "":
 else:
     from . import artifact_paths, run_metadata
     from .config import DataConfig, ModelConfig, PathsConfig, TrainConfig
-    from .config_validation import (
+    from .config.validation import (
         validated_data_config,
         validated_model_config,
         validated_train_config,
     )
     from .dataset import PortfolioPanelDataset
-    from .train_engine import (
+    from .training.engine import (
         _append_dataset_split_summary,
         _build_validation_rolling_metadata,
         _log_reproducibility_status,
@@ -72,19 +72,19 @@ else:
         _run_validation_epoch,
         build_dataset_bundle,
     )
-    from .train_finalization import (
+    from .training.finalization import (
         _epoch_candidate_checkpoint_path,
         _finalize_training_outputs,
         _normalize_best_epoch_selection_window,
         _save_training_checkpoint,
         _select_best_epoch_record,
     )
-    from .train_monitoring import (
+    from .training.monitoring import (
         _run_monitoring_holdout_backtest_epoch,
         _should_run_monitoring_holdout_backtest,
         _update_running_epoch_status,
     )
-    from .train_status import (
+    from .training.status import (
         TrainingStatusReporter,
         log_path_for_loss,
         write_training_status,

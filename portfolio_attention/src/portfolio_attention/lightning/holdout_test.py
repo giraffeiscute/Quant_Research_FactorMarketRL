@@ -20,12 +20,12 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from portfolio_attention import artifact_paths
     from portfolio_attention.config import EvaluationConfig
-    from portfolio_attention.evaluation_artifacts import build_per_scenario_payload
-    from portfolio_attention.evaluation_monitoring import (
+    from portfolio_attention.evaluation.artifacts import build_per_scenario_payload
+    from portfolio_attention.evaluation.monitoring import (
         run_monitoring_holdout_backtest as _run_monitoring_holdout_backtest_impl,
         run_monitoring_holdout_backtest_from_per_scenario_payloads as _run_monitoring_holdout_backtest_from_per_scenario_payloads_impl,
     )
-    from portfolio_attention.evaluation_runtime import (
+    from portfolio_attention.evaluation.runtime import (
         EVALUATION_PRICE_ANCHOR_MODE_PER_WINDOW,
         ROLLING_ONE_STEP_EVALUATION_MODE,
         ROLLING_ONE_STEP_HORIZON_DAYS,
@@ -43,17 +43,17 @@ if __package__ is None or __package__ == "":
         resolve_paths_config_from_args,
         resolve_runtime_configs_from_args,
     )
-    from portfolio_attention.train_monitoring import resolve_monitoring_holdout_backtest_epochs
+    from portfolio_attention.training.monitoring import resolve_monitoring_holdout_backtest_epochs
     from portfolio_attention.utils import set_seed
 else:
     from .. import artifact_paths
     from ..config import EvaluationConfig
-    from ..evaluation_artifacts import build_per_scenario_payload
-    from ..evaluation_monitoring import (
+    from ..evaluation.artifacts import build_per_scenario_payload
+    from ..evaluation.monitoring import (
         run_monitoring_holdout_backtest as _run_monitoring_holdout_backtest_impl,
         run_monitoring_holdout_backtest_from_per_scenario_payloads as _run_monitoring_holdout_backtest_from_per_scenario_payloads_impl,
     )
-    from ..evaluation_runtime import (
+    from ..evaluation.runtime import (
         EVALUATION_PRICE_ANCHOR_MODE_PER_WINDOW,
         ROLLING_ONE_STEP_EVALUATION_MODE,
         ROLLING_ONE_STEP_HORIZON_DAYS,
@@ -71,7 +71,7 @@ else:
         resolve_paths_config_from_args,
         resolve_runtime_configs_from_args,
     )
-    from ..train_monitoring import resolve_monitoring_holdout_backtest_epochs
+    from ..training.monitoring import resolve_monitoring_holdout_backtest_epochs
     from ..utils import set_seed
 
 def _resolve_env_global_rank() -> int | None:
@@ -102,7 +102,7 @@ def _is_global_rank_zero_process() -> bool:
 def _emit_holdout_console_message(message: str, *, rank_zero_only: bool = True) -> None:
     if rank_zero_only and not _is_global_rank_zero_process():
         return
-    print(f"[lightning_holdout_test] {message}", flush=True)
+    print(f"[portfolio_attention.cli.holdout_test] {message}", flush=True)
 
 
 class GracefulInterruptController:
@@ -497,6 +497,7 @@ def run_monitoring_holdout_backtest(
 def _build_parser() -> argparse.ArgumentParser:
     parser = build_arg_parser()
     parser.description = "Run post-training holdout monitoring from config-selected Lightning checkpoints."
+    parser.prog = "python -m portfolio_attention.cli.holdout_test"
     if not any(getattr(action, "dest", None) == "devices" for action in parser._actions):
         parser.add_argument(
             "--devices",
@@ -512,17 +513,17 @@ def _validate_cli_args(args: argparse.Namespace) -> None:
 
     if int(args_dict.get("parallel", 1)) != 1:
         raise ValueError(
-            "lightning_holdout_test.py only supports a single loss per invocation; --parallel must be 1."
+            "portfolio_attention.cli.holdout_test only supports a single loss per invocation; --parallel must be 1."
         )
 
     if args_dict.get("losses") is not None:
-        raise ValueError("lightning_holdout_test.py only supports --loss, not --losses.")
+        raise ValueError("portfolio_attention.cli.holdout_test only supports --loss, not --losses.")
 
     if args_dict.get("states") is not None:
-        raise ValueError("lightning_holdout_test.py only supports --state, not --states.")
+        raise ValueError("portfolio_attention.cli.holdout_test only supports --state, not --states.")
 
     if args_dict.get("resume_checkpoints") is not None:
-        raise ValueError("lightning_holdout_test.py does not support --resume-checkpoints.")
+        raise ValueError("portfolio_attention.cli.holdout_test does not support --resume-checkpoints.")
 
     if int(args_dict.get("devices", 1)) <= 0:
         raise ValueError("--devices must be positive.")
@@ -542,7 +543,7 @@ def run_post_training_holdout(
     resolved_interrupt_checker = interrupt_checker or _INTERRUPT_CONTROLLER.raise_if_interrupted
     resolved_interrupt_checker()
     if not train_config.loss_name:
-        raise ValueError("lightning_holdout_test.py requires a single --loss.")
+        raise ValueError("portfolio_attention.cli.holdout_test requires a single --loss.")
 
     configured_epochs = resolve_monitoring_holdout_backtest_epochs(
         train_config,

@@ -16,7 +16,7 @@ from ..config import (
     ModelConfig,
     PathsConfig,
 )
-from ..config_validation import (
+from ..config.validation import (
     normalize_model_config_dict,
     raise_if_checkpoint_uses_legacy_stock_id_representation_type,
     validated_data_config,

@@ -57,7 +57,7 @@ def _is_global_rank_zero() -> bool:
 def _emit_lightning_console_message(message: str) -> None:
     if not _is_global_rank_zero():
         return
-    print(f"[lightning_train] {message}", flush=True)
+    print(f"[portfolio_attention.cli.lightning_train] {message}", flush=True)
 
 
 class GracefulInterruptController:

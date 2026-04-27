@@ -17,22 +17,22 @@ import torch
 from torch.utils.data import Dataset
 
 from ..config import DataConfig, ModelConfig, PathsConfig, TrainConfig, default_scenario_dir
-from ..config_validation import (
+from ..config.validation import (
     validated_data_config,
     validated_model_config,
     validated_train_config,
 )
 from ..dataset import PortfolioPanelDataset
-from ..evaluate_rebuild import (
+from portfolio_attention.cli.evaluate_rebuild import (
     cleanup_monitoring_holdout_backtest_artifacts,
     cleanup_multi_loss_weight_trajectory_overviews,
     rebuild_monitoring_holdout_backtest_overviews,
     rebuild_multi_loss_weight_trajectory_overviews,
 )
-from ..evaluation_shared import SCENARIO_FILENAME_PATTERN
+from ..evaluation.shared import SCENARIO_FILENAME_PATTERN
 from ..train import _run_epoch_training_with_datasets, run_training
-from ..train_engine import _TRAINING_INITIALIZATION_LOCK, _log_reproducibility_status
-from ..train_status import (
+from ..training.engine import _TRAINING_INITIALIZATION_LOCK, _log_reproducibility_status
+from ..training.status import (
     SHARED_DASHBOARD_REFRESH_INTERVAL_SECONDS,
     build_dataset_progress_callback,
     build_failure_summary,
@@ -121,7 +121,10 @@ def _format_shared_dataset_summary(
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run training for portfolio_attention.")
+    parser = argparse.ArgumentParser(
+        description="Run training for portfolio_attention.",
+        prog="python -m portfolio_attention.cli.train",
+    )
     parser.add_argument("--output-root", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--state", type=str, default=argparse.SUPPRESS)
     parser.add_argument("--states", type=str, default=argparse.SUPPRESS)

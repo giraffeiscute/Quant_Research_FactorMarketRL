@@ -20,7 +20,7 @@ from .artifacts import (
     strip_monitoring_transient_tensor_fields,
 )
 from .presentation import build_monitoring_grouped_weight_trajectories
-from ..evaluate_rebuild import rebuild_monitoring_holdout_backtest_overviews
+from ..cli.evaluate_rebuild import rebuild_monitoring_holdout_backtest_overviews
 from .runtime import _collect_holdout_per_scenario_payloads
 from ..model import PortfolioAttentionModel
 from ..utils import ensure_output_dirs, save_json

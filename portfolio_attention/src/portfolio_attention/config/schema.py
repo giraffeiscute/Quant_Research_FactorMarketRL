@@ -154,7 +154,7 @@ class TrainConfig:
     select_best_from_last_x_epochs: int = 1
     holdout_backtest_interval_epochs: int = 1
     enable_fixed_epoch_holdout_backtests: bool = False
-    turnover_penalty: float = 100
+    turnover_penalty: float = 200
     turnover_penalty_norm: Literal["l1", "l2"] = "l2"
     transaction_cost_rate: float = 0.0
     loss_name: Literal["", "return", "sharpe", "dsr", "sortino", "mdd", "cvar"] = ""

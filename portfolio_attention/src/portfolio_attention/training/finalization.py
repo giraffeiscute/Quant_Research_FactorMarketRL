@@ -13,7 +13,7 @@ from torch.utils.data import Dataset
 from .. import artifact_paths
 from ..config import DataConfig, ModelConfig, PathsConfig, TrainConfig
 from ..dataset import PortfolioPanelDataset
-from ..evaluation_pipeline import run_evaluation
+from ..evaluation.pipeline import run_evaluation
 from .engine import _build_validation_rolling_metadata
 from .status import TrainingStatusReporter
 from ..utils import append_log, save_json

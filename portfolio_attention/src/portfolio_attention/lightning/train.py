@@ -36,7 +36,7 @@ if __package__ is None or __package__ == "":
     from portfolio_attention import artifact_paths
     from portfolio_attention.config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
     from portfolio_attention.dataset import PortfolioPanelDataset
-    from portfolio_attention.evaluation_runtime import _collect_single_scenario_rolling_one_step_outputs
+    from portfolio_attention.evaluation.runtime import _collect_single_scenario_rolling_one_step_outputs
     from portfolio_attention.losses import build_loss
     from portfolio_attention.train_cli import (
         _parse_states_args,
@@ -45,14 +45,14 @@ if __package__ is None or __package__ == "":
         resolve_paths_config_from_args,
         resolve_runtime_configs_from_args,
     )
-    from portfolio_attention.train_engine import _run_loss_step, build_training_model
-    from portfolio_attention.train_monitoring import resolve_monitoring_holdout_backtest_epochs
+    from portfolio_attention.training.engine import _run_loss_step, build_training_model
+    from portfolio_attention.training.monitoring import resolve_monitoring_holdout_backtest_epochs
     from portfolio_attention.utils import save_runtime_config_artifact, set_seed
 else:
     from .. import artifact_paths
     from ..config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
     from ..dataset import PortfolioPanelDataset
-    from ..evaluation_runtime import _collect_single_scenario_rolling_one_step_outputs
+    from ..evaluation.runtime import _collect_single_scenario_rolling_one_step_outputs
     from ..losses import build_loss
     from ..train_cli import (
         _parse_states_args,
@@ -61,8 +61,8 @@ else:
         resolve_paths_config_from_args,
         resolve_runtime_configs_from_args,
     )
-    from ..train_engine import _run_loss_step, build_training_model
-    from ..train_monitoring import resolve_monitoring_holdout_backtest_epochs
+    from ..training.engine import _run_loss_step, build_training_model
+    from ..training.monitoring import resolve_monitoring_holdout_backtest_epochs
     from ..utils import save_runtime_config_artifact, set_seed
 
 
@@ -659,6 +659,7 @@ def _run_post_training_holdout_after_fit_with_barriers(
 def _build_parser() -> argparse.ArgumentParser:
     parser = build_arg_parser()
     parser.description = "Run single-loss Lightning training for portfolio_attention."
+    parser.prog = "python -m portfolio_attention.cli.lightning_train"
     parser.add_argument(
         "--devices",
         type=int,
@@ -678,16 +679,18 @@ def _validate_cli_args(args: argparse.Namespace) -> None:
     args_dict = vars(args)
 
     if int(args_dict.get("parallel", 1)) != 1:
-        raise ValueError("lightning_train.py only supports a single loss per invocation; --parallel must be 1.")
+        raise ValueError(
+            "portfolio_attention.cli.lightning_train only supports a single loss per invocation; --parallel must be 1."
+        )
 
     unsupported_losses = args_dict.get("losses")
     if unsupported_losses is not None:
-        raise ValueError("lightning_train.py only supports --loss, not --losses.")
+        raise ValueError("portfolio_attention.cli.lightning_train only supports --loss, not --losses.")
 
     legacy_resume_checkpoints = args_dict.get("resume_checkpoints")
     if legacy_resume_checkpoints is not None:
         raise ValueError(
-            "lightning_train.py does not support --resume-checkpoints; use a single Lightning .ckpt with --resume-from."
+            "portfolio_attention.cli.lightning_train does not support --resume-checkpoints; use a single Lightning .ckpt with --resume-from."
         )
 
     requested_device = args_dict.get("device")
@@ -695,7 +698,7 @@ def _validate_cli_args(args: argparse.Namespace) -> None:
         normalized_device = str(requested_device).strip().lower()
         if normalized_device not in {"auto", "cuda"}:
             raise ValueError(
-                "lightning_train.py always runs Lightning with accelerator='gpu'; --device must be 'auto' or 'cuda'."
+                "portfolio_attention.cli.lightning_train always runs Lightning with accelerator='gpu'; --device must be 'auto' or 'cuda'."
             )
 
     if int(getattr(args, "devices", 0)) <= 0:
@@ -719,10 +722,10 @@ def _resolve_single_state_runtime(
     model_config = resolve_model_config_from_args(args)
 
     if not train_config.loss_name:
-        raise ValueError("lightning_train.py requires a single --loss.")
+        raise ValueError("portfolio_attention.cli.lightning_train requires a single --loss.")
     if train_config.resume_from is not None and Path(train_config.resume_from).suffix != ".ckpt":
         raise ValueError(
-            "lightning_train.py expects --resume-from to point to a Lightning .ckpt checkpoint in this MVP."
+            "portfolio_attention.cli.lightning_train expects --resume-from to point to a Lightning .ckpt checkpoint in this MVP."
         )
     save_runtime_config_artifact(
         paths=paths,
@@ -732,7 +735,7 @@ def _resolve_single_state_runtime(
     )
     if not torch.cuda.is_available():
         raise RuntimeError(
-            "lightning_train.py requires CUDA because the Trainer is configured with accelerator='gpu'."
+            "portfolio_attention.cli.lightning_train requires CUDA because the Trainer is configured with accelerator='gpu'."
         )
     available_gpus = torch.cuda.device_count()
     if int(args.devices) > available_gpus:
