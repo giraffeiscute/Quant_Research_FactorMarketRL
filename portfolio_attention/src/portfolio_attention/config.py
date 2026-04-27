@@ -133,6 +133,7 @@ class ModelConfig:
     allocation_smoothing_alpha: float = 1
     initial_allocation_mode: Literal["equal_weight", "random_dirichlet"] = "random_dirichlet"
     initial_random_concentration: float = 1.0
+    detach_prev_weight: bool = False
     dropout: float = 0.1
 
     def as_dict(self) -> dict:
@@ -152,7 +153,7 @@ class TrainConfig:
     select_best_from_last_x_epochs: int = 1
     holdout_backtest_interval_epochs: int = 1
     enable_fixed_epoch_holdout_backtests: bool = False
-    turnover_penalty: float = 10
+    turnover_penalty: float = 100
     turnover_penalty_norm: Literal["l1", "l2"] = "l2"
     transaction_cost_rate: float = 0.0
     loss_name: Literal["", "return", "sharpe", "dsr", "sortino", "mdd", "cvar"] = ""

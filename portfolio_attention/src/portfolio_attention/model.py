@@ -55,6 +55,12 @@ class PortfolioAttentionModel(nn.Module):
         self.allocation_smoothing_alpha = float(config.allocation_smoothing_alpha)
         self.initial_allocation_mode = str(config.initial_allocation_mode).strip().lower()
         self.initial_random_concentration = float(config.initial_random_concentration)
+        if not isinstance(config.detach_prev_weight, bool):
+            raise ValueError(
+                "detach_prev_weight must be a bool, "
+                f"received {config.detach_prev_weight!r}."
+            )
+        self.detach_prev_weight = config.detach_prev_weight
         if self.initial_allocation_mode not in {"equal_weight", "random_dirichlet"}:
             raise ValueError(
                 "initial_allocation_mode must be one of {'equal_weight', 'random_dirichlet'}, "
@@ -507,10 +513,11 @@ class PortfolioAttentionModel(nn.Module):
         turnovers: list[torch.Tensor] = []
         allocation_change_l2_values: list[torch.Tensor] = []
         for time_index in range(time_steps):
+            prev_weight_step = prev_weight.detach() if self.detach_prev_weight else prev_weight
             logits_t = allocation_logits[:, time_index, :]
             raw_t = torch.softmax(logits_t, dim=-1)
-            allocation_t = alpha * raw_t + (1.0 - alpha) * prev_weight
-            allocation_delta_t = allocation_t - prev_weight
+            allocation_t = alpha * raw_t + (1.0 - alpha) * prev_weight_step
+            allocation_delta_t = allocation_t - prev_weight_step
             turnover_t = 0.5 * torch.abs(allocation_delta_t).sum(dim=-1)
             allocation_change_l2_t = allocation_delta_t.pow(2).sum(dim=-1)
             raw_allocations.append(raw_t)
@@ -527,11 +534,12 @@ class PortfolioAttentionModel(nn.Module):
         )
 
     @staticmethod
-    def _allocation_change_l2_from_allocation(
+    def _allocation_delta_metrics_from_allocation(
         allocation: torch.Tensor,
         *,
         initial_allocation: torch.Tensor,
-    ) -> torch.Tensor:
+        detach_prev_allocation: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         if allocation.ndim != 3:
             raise ValueError("allocation must have shape [S, T, N+1].")
         if initial_allocation.shape != (allocation.shape[0], allocation.shape[2]):
@@ -543,7 +551,26 @@ class PortfolioAttentionModel(nn.Module):
             [initial_allocation.unsqueeze(1), allocation[:, :-1, :]],
             dim=1,
         )
-        return (allocation - prev_allocation).pow(2).sum(dim=-1)
+        if detach_prev_allocation:
+            prev_allocation = prev_allocation.detach()
+        allocation_delta = allocation - prev_allocation
+        turnover = 0.5 * torch.abs(allocation_delta).sum(dim=-1)
+        allocation_change_l2 = allocation_delta.pow(2).sum(dim=-1)
+        return turnover, allocation_change_l2
+
+    @staticmethod
+    def _allocation_change_l2_from_allocation(
+        allocation: torch.Tensor,
+        *,
+        initial_allocation: torch.Tensor,
+        detach_prev_allocation: bool = False,
+    ) -> torch.Tensor:
+        _, allocation_change_l2 = PortfolioAttentionModel._allocation_delta_metrics_from_allocation(
+            allocation,
+            initial_allocation=initial_allocation,
+            detach_prev_allocation=detach_prev_allocation,
+        )
+        return allocation_change_l2
 
     def _score_stock_allocation(
         self,
@@ -558,7 +585,9 @@ class PortfolioAttentionModel(nn.Module):
         torch.Tensor,
         torch.Tensor,
         dict[str, Any],
-        tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None,
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        | None,
     ]:
         num_scenarios, time_steps, num_stocks, _ = stock_temporal_current.shape
         market_current_expanded = market_current.unsqueeze(2).expand(-1, -1, num_stocks, -1)
@@ -689,23 +718,27 @@ class PortfolioAttentionModel(nn.Module):
         turnovers_by_step: list[torch.Tensor] = []
         allocation_change_l2_by_step: list[torch.Tensor] = []
         for time_index in range(time_steps):
+            prev_weight_step = prev_weight.detach() if self.detach_prev_weight else prev_weight
             attended_stock_t = attended_stock[:, time_index, :, :]
             stock_state_input = torch.cat(
-                [attended_stock_t, prev_weight[:, :num_stocks].unsqueeze(-1)],
+                [attended_stock_t, prev_weight_step[:, :num_stocks].unsqueeze(-1)],
                 dim=-1,
             )
             stock_state_repr = self.stock_prev_weight_mlp(stock_state_input)
             stock_logit_t = self.stock_cross_attention_score(stock_state_repr).squeeze(-1)
             cash_base_input = attended_stock_t.mean(dim=1)
             cash_state_base = self.cash_state_mlp_base(cash_base_input)
-            cash_state_input = torch.cat([cash_state_base, prev_weight[:, -1:].contiguous()], dim=-1)
+            cash_state_input = torch.cat(
+                [cash_state_base, prev_weight_step[:, -1:].contiguous()],
+                dim=-1,
+            )
             cash_state_repr = self.cash_prev_weight_mlp(cash_state_input)
             cash_logit_t = self.cash_cross_attention_score(cash_state_repr).squeeze(-1)
 
             allocation_logits_t = torch.cat([stock_logit_t, cash_logit_t.unsqueeze(-1)], dim=-1)
             raw_t = torch.softmax(allocation_logits_t, dim=-1)
-            allocation_t = alpha * raw_t + (1.0 - alpha) * prev_weight
-            allocation_delta_t = allocation_t - prev_weight
+            allocation_t = alpha * raw_t + (1.0 - alpha) * prev_weight_step
+            allocation_delta_t = allocation_t - prev_weight_step
             turnover_t = 0.5 * torch.abs(allocation_delta_t).sum(dim=-1)
             allocation_change_l2_t = allocation_delta_t.pow(2).sum(dim=-1)
 
@@ -832,11 +865,19 @@ class PortfolioAttentionModel(nn.Module):
             )
         else:
             if len(precomputed_smoothing) == 3:
-                raw_allocation, allocation, turnover = precomputed_smoothing
-                allocation_change_l2 = self._allocation_change_l2_from_allocation(
-                    allocation,
-                    initial_allocation=initial_allocation,
-                )
+                raw_allocation, allocation, provided_turnover = precomputed_smoothing
+                if self.detach_prev_weight:
+                    turnover, allocation_change_l2 = self._allocation_delta_metrics_from_allocation(
+                        allocation,
+                        initial_allocation=initial_allocation,
+                        detach_prev_allocation=True,
+                    )
+                else:
+                    turnover = provided_turnover
+                    allocation_change_l2 = self._allocation_change_l2_from_allocation(
+                        allocation,
+                        initial_allocation=initial_allocation,
+                    )
             elif len(precomputed_smoothing) == 4:
                 raw_allocation, allocation, turnover, allocation_change_l2 = precomputed_smoothing
             else:
@@ -862,6 +903,7 @@ class PortfolioAttentionModel(nn.Module):
             "stock_cross_sectional_encoder_type": self.stock_cross_sectional_encoder_type,
             "stock_temporal_attention_window": self.stock_temporal_attention_window,
             "allocation_smoothing_alpha": self.allocation_smoothing_alpha,
+            "detach_prev_weight": self.detach_prev_weight,
             "initial_allocation_mode": self.initial_allocation_mode,
             "initial_random_concentration": self.initial_random_concentration,
             "stock_current_shape": tuple(stock_current.shape),

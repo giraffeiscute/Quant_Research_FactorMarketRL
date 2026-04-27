@@ -48,6 +48,8 @@ def normalize_model_config_dict(config_dict: dict[str, Any]) -> dict[str, Any]:
         normalized["initial_allocation_mode"] = "equal_weight"
     if "initial_random_concentration" not in normalized:
         normalized["initial_random_concentration"] = 1.0
+    if "detach_prev_weight" not in normalized:
+        normalized["detach_prev_weight"] = False
     return normalized
 
 
@@ -280,6 +282,12 @@ def validate_model_config(config: ModelConfig) -> None:
         raise ValueError(
             "ModelConfig.initial_random_concentration must be > 0.0, "
             f"received {config.initial_random_concentration}."
+        )
+
+    if not isinstance(config.detach_prev_weight, bool):
+        raise ValueError(
+            "ModelConfig.detach_prev_weight must be a bool, "
+            f"received {config.detach_prev_weight!r}."
         )
 
 
