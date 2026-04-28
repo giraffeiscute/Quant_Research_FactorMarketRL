@@ -18,16 +18,16 @@ if str(SRC_DIR) not in sys.path:
 STATE_NAMES = ("bear", "neutral", "bull")
 LOSS_NAMES = ("sharpe",)
 # Edit these when switching the comparison targets.
-RESULT_DIR_1 = PROJECT_DIR / "outputs" / "result v14 temp attention add stock embedding nom fix"
-RESULT_DIR_2 = PROJECT_DIR / "outputs" / "result v15 temp attention concat stock embedding non linear"
-RESULT_DIR_3 = PROJECT_DIR / "outputs" / "result v17 temp stock attention concat"
-RESULT_DIR_4 = PROJECT_DIR / "outputs" / "result v18 add dropout 0.1"
+RESULT_DIR_1 = PROJECT_DIR / "outputs" / "result v16 temp stock attention add"
+RESULT_DIR_2 = PROJECT_DIR / "outputs" / "result v18 add dropout 0.1"
+RESULT_DIR_3 = PROJECT_DIR / "outputs" / "result v19 lamda0.2 l1 a=0.7"
+RESULT_DIR_4 = PROJECT_DIR / "outputs" / "result v21 add return lamda 100 l2 a=0.9"
 OUTPUT_DIR = PROJECT_DIR / "outputs"
 # Leave blank to auto-generate a readable label from the directory name.
-LABEL_1 = "temp add"
-LABEL_2 = "temp concat"
-LABEL_3 = "temp stock concat"
-LABEL_4 = "temp stock dropout"
+LABEL_1 = "add"
+LABEL_2 = "drop 0.1"
+LABEL_3 = "weight add"
+LABEL_4 = "weight loss*Ct-1"
 COMPARISON_CSV_NAME = "best_epoch_state_loss_comparison.csv"
 SUMMARY_CSV_NAME = "best_epoch_state_summary.csv"
 
@@ -274,7 +274,7 @@ def _scenario_metrics_from_manifest(
 
 def _collect_state_epoch_manifests(state_dir: Path) -> tuple[dict[int, dict[str, Path]], list[dict[str, Any]]]:
     if not state_dir.is_dir():
-        raise FileNotFoundError(f"State directory does not exist: {state_dir}")
+        return {}, [{"state_dir": str(state_dir), "reason": "missing_state_directory"}]
 
     epoch_to_manifests: dict[int, dict[str, Path]] = {}
     skipped_epochs: list[dict[str, Any]] = []
@@ -297,7 +297,7 @@ def _collect_state_epoch_manifests(state_dir: Path) -> tuple[dict[int, dict[str,
         epoch_to_manifests[epoch] = manifest_paths
 
     if not epoch_to_manifests:
-        raise ValueError(f"No complete epoch directories were found in {state_dir}")
+        skipped_epochs.append({"state_dir": str(state_dir), "reason": "no_complete_epoch_directories"})
     return epoch_to_manifests, skipped_epochs
 
 
@@ -350,7 +350,13 @@ def _select_best_epoch(state_dir: Path) -> dict[str, Any]:
             best_payload = candidate
 
     if best_payload is None:
-        raise ValueError(f"Failed to select a best epoch for {state_dir}")
+        return {
+            "epoch": None,
+            "epoch_mean_sr": None,
+            "epoch_mean_return": None,
+            "per_loss_scenarios": {loss_name: {} for loss_name in LOSS_NAMES},
+            "skipped_epochs": skipped_epochs,
+        }
     best_payload["skipped_epochs"] = skipped_epochs
     return best_payload
 
@@ -359,7 +365,9 @@ def _average_loss_rows(
     loss_scenarios: dict[str, dict[str, float | str]],
     *,
     context: str,
-) -> tuple[float, float, float, float | None]:
+) -> tuple[float | None, float | None, float | None, float | None]:
+    if not loss_scenarios:
+        return None, None, None, None
     return_values = [float(item["portfolio_return"]) for item in loss_scenarios.values()]
     sr_values = [float(item["portfolio_sr"]) for item in loss_scenarios.values()]
     selected_stock_counts = [float(item["selected_stock_count"]) for item in loss_scenarios.values()]
@@ -425,10 +433,10 @@ def _build_comparison_rows(
                     row = loss_rows_by_label[label].get(scenario_id)
                     scenario_row[f"{label}_best_epoch"] = best_payload["epoch"]
                     scenario_row[f"{label}_return"] = (
-                        float(row["portfolio_return"]) if row is not None else ""
+                        float(row["portfolio_return"]) if row is not None else None
                     )
                     scenario_row[f"{label}_sr"] = (
-                        float(row["portfolio_sr"]) if row is not None else ""
+                        float(row["portfolio_sr"]) if row is not None else None
                     )
                     scenario_row[f"{label}_turnover"] = (
                         float(row["turnover_rate"])
@@ -450,9 +458,9 @@ def _build_summary_rows(
         for label, best_payload in state_payloads:
             row[f"{label}_best_epoch"] = best_payload["epoch"]
         for loss_name in LOSS_NAMES:
-            mean_return_by_label: dict[str, float] = {}
-            mean_sr_by_label: dict[str, float] = {}
-            mean_stocks_by_label: dict[str, float] = {}
+            mean_return_by_label: dict[str, float | None] = {}
+            mean_sr_by_label: dict[str, float | None] = {}
+            mean_stocks_by_label: dict[str, float | None] = {}
             mean_turnover_by_label: dict[str, float | None] = {}
             for label, best_payload in state_payloads:
                 avg_return, avg_sr, avg_stocks_bought, avg_turnover = _average_loss_rows(

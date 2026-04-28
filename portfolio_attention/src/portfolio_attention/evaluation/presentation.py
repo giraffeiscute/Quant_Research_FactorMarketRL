@@ -13,7 +13,7 @@ import torch
 
 from . import shared as evaluation_shared
 from ..config import EvaluationConfig
-from ..dataset import PortfolioPanelDataset
+from ..data.dataset import PortfolioPanelDataset
 from .types import RuntimePayloadAdapter
 
 REQUIRED_AUX_COLUMNS = ["stock_id", "t", "mu", "alpha", "epsilon_variance"]

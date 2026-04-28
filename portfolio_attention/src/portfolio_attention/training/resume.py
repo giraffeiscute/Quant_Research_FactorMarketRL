@@ -10,7 +10,8 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
-from .. import artifact_paths, run_metadata
+from ..artifact import paths as artifact_paths
+from ..artifact import run_metadata
 from ..config import (
     DataConfig,
     ModelConfig,
@@ -21,7 +22,7 @@ from ..config.validation import (
     normalize_model_config_dict,
     raise_if_checkpoint_uses_legacy_stock_id_representation_type,
 )
-from ..dataset import PortfolioPanelDataset
+from ..data.dataset import PortfolioPanelDataset
 
 
 def _serialize_config(config: object) -> dict[str, Any]:

@@ -16,7 +16,7 @@ from rich.live import Live
 from rich.table import Table
 
 from ..config import PathsConfig
-from ..utils import append_log
+from ..common.utils import append_log
 
 
 NON_TERMINAL_STATUSES = {"QUEUED", "STARTING", "PREPARING_DATA", "RUNNING"}

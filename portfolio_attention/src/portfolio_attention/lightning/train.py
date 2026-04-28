@@ -33,12 +33,12 @@ from torch.utils.data import DataLoader, Dataset
 from torchmetrics import Metric
 
 if __package__ is None or __package__ == "":
-    from portfolio_attention import artifact_paths
+    from portfolio_attention.artifact import paths as artifact_paths
     from portfolio_attention.config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
-    from portfolio_attention.dataset import PortfolioPanelDataset
+    from portfolio_attention.data.dataset import PortfolioPanelDataset
     from portfolio_attention.evaluation.runtime import _collect_single_scenario_rolling_one_step_outputs
-    from portfolio_attention.losses import build_loss
-    from portfolio_attention.train_cli import (
+    from portfolio_attention.model.losses import build_loss
+    from portfolio_attention.cli.train import (
         _parse_states_args,
         build_arg_parser,
         resolve_model_config_from_args,
@@ -47,14 +47,14 @@ if __package__ is None or __package__ == "":
     )
     from portfolio_attention.training.engine import _run_loss_step, build_training_model
     from portfolio_attention.training.monitoring import resolve_monitoring_holdout_backtest_epochs
-    from portfolio_attention.utils import save_runtime_config_artifact, set_seed
+    from portfolio_attention.common.utils import save_runtime_config_artifact, set_seed
 else:
-    from .. import artifact_paths
+    from ..artifact import paths as artifact_paths
     from ..config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
-    from ..dataset import PortfolioPanelDataset
+    from ..data.dataset import PortfolioPanelDataset
     from ..evaluation.runtime import _collect_single_scenario_rolling_one_step_outputs
-    from ..losses import build_loss
-    from ..train_cli import (
+    from ..model.losses import build_loss
+    from ..cli.train import (
         _parse_states_args,
         build_arg_parser,
         resolve_model_config_from_args,
@@ -63,7 +63,7 @@ else:
     )
     from ..training.engine import _run_loss_step, build_training_model
     from ..training.monitoring import resolve_monitoring_holdout_backtest_epochs
-    from ..utils import save_runtime_config_artifact, set_seed
+    from ..common.utils import save_runtime_config_artifact, set_seed
 
 
 class LightningTrainDataModule(pl.LightningDataModule):
@@ -538,7 +538,12 @@ def _run_post_training_holdout_after_fit(
         if trainer.is_global_zero:
             _emit_lightning_console_message("Skipping post-training holdout: no completed epochs were detected.")
         return
-    if not bool(getattr(trainer, "is_global_zero", False)):
+
+    resolved_world_size = int(getattr(trainer, "world_size", 1) or 1)
+    # When torch.distributed is initialized (e.g., DDP fit), the holdout path performs
+    # collective ops (DistributedSampler/all_gather_object), so every rank must participate.
+    should_run_on_this_rank = bool(getattr(trainer, "is_global_zero", False)) or resolved_world_size > 1
+    if not should_run_on_this_rank:
         return
 
     if holdout_runner is None:
@@ -559,7 +564,7 @@ def _run_post_training_holdout_after_fit(
         "model_config": model_config,
         "train_config": train_config,
         "max_epoch": completed_epochs,
-        "devices": int(getattr(trainer, "world_size", 1) or 1),
+        "devices": resolved_world_size,
         "datamodule": datamodule,
         "interrupt_checker": _INTERRUPT_CONTROLLER.raise_if_interrupted,
     }

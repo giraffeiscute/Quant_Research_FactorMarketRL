@@ -8,13 +8,13 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
-from .. import run_metadata
+from ..artifact import run_metadata
 from ..config import DataConfig, ModelConfig, PathsConfig, TrainConfig
-from ..dataset import PortfolioPanelDataset
+from ..data.dataset import PortfolioPanelDataset
 from ..evaluation.monitoring import run_monitoring_holdout_backtest
 from .finalization import _monitoring_epoch_checkpoint_path, _save_training_checkpoint
 from .status import TrainingStatusReporter
-from ..utils import append_log
+from ..common.utils import append_log
 
 
 FIXED_EPOCH_MONITORING_HOLDOUT_BACKTEST_EPOCHS = frozenset({50, 100})

@@ -9,7 +9,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from .. import artifact_paths
+from ..artifact import paths as artifact_paths
 from ..config import (
     DataConfig,
     EvaluationConfig,
@@ -23,7 +23,7 @@ from ..config.validation import (
     validated_evaluation_config,
     validated_model_config,
 )
-from ..dataset import PortfolioPanelDataset
+from ..data.dataset import PortfolioPanelDataset
 from .artifacts import (
     build_holdout_summary_payload,
     cleanup_stale_prediction_artifacts,
@@ -33,7 +33,7 @@ from .artifacts import (
 )
 from .runtime import _collect_holdout_per_scenario_payloads
 from ..model import PortfolioAttentionModel
-from ..utils import ensure_output_dirs, resolve_device, save_json, set_seed
+from ..common.utils import ensure_output_dirs, resolve_device, save_json, set_seed
 
 
 def _resolve_checkpoint_state(data_config: DataConfig) -> str | None:

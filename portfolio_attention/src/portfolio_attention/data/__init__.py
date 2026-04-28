@@ -1,3 +1,3 @@
 """Data domain package."""
 
-from .dataset import *
+from portfolio_attention.data.dataset import *

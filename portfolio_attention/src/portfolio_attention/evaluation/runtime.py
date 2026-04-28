@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from ..config import EvaluationConfig
-from ..dataset import PortfolioPanelDataset, scale_stock_feature_context_array
+from ..data.dataset import PortfolioPanelDataset, scale_stock_feature_context_array
 from .artifacts import build_per_scenario_payload
 from ..model import PortfolioAttentionModel
 

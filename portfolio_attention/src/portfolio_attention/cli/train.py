@@ -22,7 +22,7 @@ from ..config.validation import (
     validated_model_config,
     validated_train_config,
 )
-from ..dataset import PortfolioPanelDataset
+from ..data.dataset import PortfolioPanelDataset
 from portfolio_attention.cli.evaluate_rebuild import (
     cleanup_monitoring_holdout_backtest_artifacts,
     cleanup_multi_loss_weight_trajectory_overviews,
@@ -30,8 +30,8 @@ from portfolio_attention.cli.evaluate_rebuild import (
     rebuild_multi_loss_weight_trajectory_overviews,
 )
 from ..evaluation.shared import SCENARIO_FILENAME_PATTERN
-from ..train import _run_epoch_training_with_datasets, run_training
 from ..training.engine import _TRAINING_INITIALIZATION_LOCK, _log_reproducibility_status
+from ..training.orchestration import _run_epoch_training_with_datasets, run_training
 from ..training.status import (
     SHARED_DASHBOARD_REFRESH_INTERVAL_SECONDS,
     build_dataset_progress_callback,
@@ -45,7 +45,7 @@ from ..training.status import (
     status_path_for_loss,
     write_training_status,
 )
-from ..utils import ensure_output_dirs, resolve_device
+from ..common.utils import ensure_output_dirs, resolve_device
 
 
 TERMINAL_SUMMARY_KEYS = [

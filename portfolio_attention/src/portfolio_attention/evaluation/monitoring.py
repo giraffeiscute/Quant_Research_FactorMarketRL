@@ -9,10 +9,11 @@ from typing import Any, Callable
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from .. import artifact_paths, run_metadata
+from ..artifact import paths as artifact_paths
+from ..artifact import run_metadata
 from . import shared as evaluation_shared
 from ..config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
-from ..dataset import PortfolioPanelDataset
+from ..data.dataset import PortfolioPanelDataset
 from .artifacts import (
     build_holdout_summary_payload,
     build_monitoring_scenario_artifact,
@@ -23,7 +24,7 @@ from .presentation import build_monitoring_grouped_weight_trajectories
 from ..cli.evaluate_rebuild import rebuild_monitoring_holdout_backtest_overviews
 from .runtime import _collect_holdout_per_scenario_payloads
 from ..model import PortfolioAttentionModel
-from ..utils import ensure_output_dirs, save_json
+from ..common.utils import ensure_output_dirs, save_json
 
 WEIGHT_TRAJECTORY_OVERVIEW_FILENAME_SUFFIX = evaluation_shared.WEIGHT_TRAJECTORY_OVERVIEW_FILENAME_SUFFIX
 

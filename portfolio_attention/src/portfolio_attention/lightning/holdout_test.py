@@ -18,7 +18,7 @@ if __package__ is None or __package__ == "":
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from portfolio_attention import artifact_paths
+    from portfolio_attention.artifact import paths as artifact_paths
     from portfolio_attention.config import EvaluationConfig
     from portfolio_attention.evaluation.artifacts import build_per_scenario_payload
     from portfolio_attention.evaluation.monitoring import (
@@ -37,16 +37,16 @@ if __package__ is None or __package__ == "":
         PortfolioLightningModule,
         _configure_warning_routing,
     )
-    from portfolio_attention.train_cli import (
+    from portfolio_attention.cli.train import (
         build_arg_parser,
         resolve_model_config_from_args,
         resolve_paths_config_from_args,
         resolve_runtime_configs_from_args,
     )
     from portfolio_attention.training.monitoring import resolve_monitoring_holdout_backtest_epochs
-    from portfolio_attention.utils import set_seed
+    from portfolio_attention.common.utils import set_seed
 else:
-    from .. import artifact_paths
+    from ..artifact import paths as artifact_paths
     from ..config import EvaluationConfig
     from ..evaluation.artifacts import build_per_scenario_payload
     from ..evaluation.monitoring import (
@@ -65,14 +65,14 @@ else:
         PortfolioLightningModule,
         _configure_warning_routing,
     )
-    from ..train_cli import (
+    from ..cli.train import (
         build_arg_parser,
         resolve_model_config_from_args,
         resolve_paths_config_from_args,
         resolve_runtime_configs_from_args,
     )
     from ..training.monitoring import resolve_monitoring_holdout_backtest_epochs
-    from ..utils import set_seed
+    from ..common.utils import set_seed
 
 def _resolve_env_global_rank() -> int | None:
     raw_rank = os.environ.get("RANK")

@@ -1,3 +1,3 @@
 """Common utilities domain package."""
 
-from .utils import *
+from portfolio_attention.common.utils import *

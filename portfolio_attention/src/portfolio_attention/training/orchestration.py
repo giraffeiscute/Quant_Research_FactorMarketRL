@@ -1,4 +1,4 @@
-"""Training orchestration entrypoint."""
+"""Training orchestration for a single training run."""
 
 from __future__ import annotations
 
@@ -10,91 +10,47 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
-if __package__ is None or __package__ == "":
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from portfolio_attention import artifact_paths, run_metadata
-    from portfolio_attention.config import DataConfig, ModelConfig, PathsConfig, TrainConfig
-    from portfolio_attention.config.validation import (
-        validated_data_config,
-        validated_model_config,
-        validated_train_config,
-    )
-    from portfolio_attention.dataset import PortfolioPanelDataset
-    from portfolio_attention.training.engine import (
-        _append_dataset_split_summary,
-        _build_validation_rolling_metadata,
-        _log_reproducibility_status,
-        _prepare_training_runtime,
-        _run_training_epoch,
-        _run_validation_epoch,
-        build_dataset_bundle,
-    )
-    from portfolio_attention.training.finalization import (
-        _epoch_candidate_checkpoint_path,
-        _finalize_training_outputs,
-        _normalize_best_epoch_selection_window,
-        _save_training_checkpoint,
-        _select_best_epoch_record,
-    )
-    from portfolio_attention.training.monitoring import (
-        _run_monitoring_holdout_backtest_epoch,
-        _should_run_monitoring_holdout_backtest,
-        _update_running_epoch_status,
-    )
-    from portfolio_attention.training.status import (
-        TrainingStatusReporter,
-        log_path_for_loss,
-        write_training_status,
-    )
-    from portfolio_attention.utils import (
-        append_log,
-        ensure_output_dirs,
-        resolve_device,
-        save_runtime_config_artifact,
-    )
-else:
-    from . import artifact_paths, run_metadata
-    from .config import DataConfig, ModelConfig, PathsConfig, TrainConfig
-    from .config.validation import (
-        validated_data_config,
-        validated_model_config,
-        validated_train_config,
-    )
-    from .dataset import PortfolioPanelDataset
-    from .training.engine import (
-        _append_dataset_split_summary,
-        _build_validation_rolling_metadata,
-        _log_reproducibility_status,
-        _prepare_training_runtime,
-        _run_training_epoch,
-        _run_validation_epoch,
-        build_dataset_bundle,
-    )
-    from .training.finalization import (
-        _epoch_candidate_checkpoint_path,
-        _finalize_training_outputs,
-        _normalize_best_epoch_selection_window,
-        _save_training_checkpoint,
-        _select_best_epoch_record,
-    )
-    from .training.monitoring import (
-        _run_monitoring_holdout_backtest_epoch,
-        _should_run_monitoring_holdout_backtest,
-        _update_running_epoch_status,
-    )
-    from .training.status import (
-        TrainingStatusReporter,
-        log_path_for_loss,
-        write_training_status,
-    )
-    from .utils import (
-        append_log,
-        ensure_output_dirs,
-        resolve_device,
-        save_runtime_config_artifact,
-    )
+from ..artifact import paths as artifact_paths
+from ..artifact import run_metadata
+from ..common.utils import (
+    append_log,
+    ensure_output_dirs,
+    resolve_device,
+    save_runtime_config_artifact,
+)
+from ..config import DataConfig, ModelConfig, PathsConfig, TrainConfig
+from ..config.validation import (
+    validated_data_config,
+    validated_model_config,
+    validated_train_config,
+)
+from ..data.dataset import PortfolioPanelDataset
+from .engine import (
+    _append_dataset_split_summary,
+    _build_validation_rolling_metadata,
+    _log_reproducibility_status,
+    _prepare_training_runtime,
+    _run_training_epoch,
+    _run_validation_epoch,
+    build_dataset_bundle,
+)
+from .finalization import (
+    _epoch_candidate_checkpoint_path,
+    _finalize_training_outputs,
+    _normalize_best_epoch_selection_window,
+    _save_training_checkpoint,
+    _select_best_epoch_record,
+)
+from .monitoring import (
+    _run_monitoring_holdout_backtest_epoch,
+    _should_run_monitoring_holdout_backtest,
+    _update_running_epoch_status,
+)
+from .status import (
+    TrainingStatusReporter,
+    log_path_for_loss,
+    write_training_status,
+)
 
 
 def _run_epoch_training_with_datasets(
@@ -542,12 +498,3 @@ def run_epoch_training(
 
 
 run_training = run_epoch_training
-
-
-if __name__ == "__main__":
-    if __package__ is None or __package__ == "":
-        from portfolio_attention.cli.train import main
-    else:
-        from .cli.train import main
-
-    main()

@@ -9,7 +9,7 @@ from typing import Any
 
 import torch
 
-from portfolio_attention import artifact_paths
+from portfolio_attention.artifact import paths as artifact_paths
 from portfolio_attention.cli import evaluate_rebuild
 from portfolio_attention.config import (
     DataConfig,

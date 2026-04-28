@@ -11,7 +11,7 @@ import torch
 
 from . import shared as evaluation_shared
 from ..config import EvaluationConfig
-from ..dataset import PortfolioPanelDataset
+from ..data.dataset import PortfolioPanelDataset
 from .types import (
     BenchmarkMetrics,
     RuntimePayloadAdapter,
@@ -23,8 +23,8 @@ from .types import (
     ScenarioSelectionStats,
     ScenarioWindowMeta,
 )
-from ..losses import build_loss, sharpe_loss
-from ..utils import save_json
+from ..model.losses import build_loss, sharpe_loss
+from ..common.utils import save_json
 from . import presentation as evaluation_presentation
 
 EXPORTED_TRAIN_CONFIG_KEYS = [

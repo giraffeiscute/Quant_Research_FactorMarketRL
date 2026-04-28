@@ -10,13 +10,13 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
-from .. import artifact_paths
+from ..artifact import paths as artifact_paths
 from ..config import DataConfig, ModelConfig, PathsConfig, TrainConfig
-from ..dataset import PortfolioPanelDataset
+from ..data.dataset import PortfolioPanelDataset
 from ..evaluation.pipeline import run_evaluation
 from .engine import _build_validation_rolling_metadata
 from .status import TrainingStatusReporter
-from ..utils import append_log, save_json
+from ..common.utils import append_log, save_json
 
 
 @dataclass

@@ -7,7 +7,8 @@ from pathlib import Path
 import sys
 from typing import Any, Callable
 
-from portfolio_attention import artifact_paths, run_metadata
+from portfolio_attention.artifact import paths as artifact_paths
+from portfolio_attention.artifact import run_metadata
 from portfolio_attention.config import DataConfig, EvaluationConfig, PathsConfig
 from portfolio_attention.config.validation import (
     LEGACY_LOOKBACK_MODES,
@@ -22,7 +23,7 @@ from portfolio_attention.evaluation.presentation import (
     render_monitoring_multi_loss_weight_trajectory_overview_chart,
     render_weight_trajectory_overview_chart,
 )
-from portfolio_attention.utils import ensure_output_dirs, save_json
+from portfolio_attention.common.utils import ensure_output_dirs, save_json
 
 MONITORING_HOLDOUT_BACKTEST_MANIFEST_SUFFIX = artifact_paths.MONITORING_HOLDOUT_BACKTEST_MANIFEST_SUFFIX
 
