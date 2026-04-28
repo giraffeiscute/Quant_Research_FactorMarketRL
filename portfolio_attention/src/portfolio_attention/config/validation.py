@@ -50,6 +50,10 @@ def normalize_model_config_dict(config_dict: dict[str, Any]) -> dict[str, Any]:
         normalized["initial_random_concentration"] = 1.0
     if "detach_prev_weight" not in normalized:
         normalized["detach_prev_weight"] = False
+    if "use_prev_weight_feature" not in normalized:
+        normalized["use_prev_weight_feature"] = False
+    if "dropout" not in normalized:
+        normalized["dropout"] = 0.1
     return normalized
 
 
@@ -261,6 +265,13 @@ def validate_model_config(config: ModelConfig) -> None:
             f"received {config.time_positional_encoding_type!r}."
         )
 
+    config.dropout = float(config.dropout)
+    if not 0.0 <= config.dropout <= 1.0:
+        raise ValueError(
+            "ModelConfig.dropout must be in [0.0, 1.0], "
+            f"received {config.dropout}."
+        )
+
     config.allocation_smoothing_alpha = float(config.allocation_smoothing_alpha)
     if not 0.0 <= config.allocation_smoothing_alpha <= 1.0:
         raise ValueError(
@@ -288,6 +299,11 @@ def validate_model_config(config: ModelConfig) -> None:
         raise ValueError(
             "ModelConfig.detach_prev_weight must be a bool, "
             f"received {config.detach_prev_weight!r}."
+        )
+    if not isinstance(config.use_prev_weight_feature, bool):
+        raise ValueError(
+            "ModelConfig.use_prev_weight_feature must be a bool, "
+            f"received {config.use_prev_weight_feature!r}."
         )
 
 

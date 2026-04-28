@@ -61,6 +61,7 @@ class PortfolioAttentionModel(nn.Module):
                 f"received {config.detach_prev_weight!r}."
             )
         self.detach_prev_weight = config.detach_prev_weight
+        self.use_prev_weight_feature = bool(getattr(config, "use_prev_weight_feature", False))
         if self.initial_allocation_mode not in {"equal_weight", "random_dirichlet"}:
             raise ValueError(
                 "initial_allocation_mode must be one of {'equal_weight', 'random_dirichlet'}, "
@@ -199,18 +200,22 @@ class PortfolioAttentionModel(nn.Module):
                 nn.Dropout(config.dropout),
                 nn.Linear(self.stock_attention_dim, self.stock_attention_dim),
             )
-            self.stock_prev_weight_mlp = nn.Sequential(
-                nn.Linear(self.stock_attention_dim + 1, self.stock_attention_dim),
-                nn.GELU(),
-                nn.Dropout(config.dropout),
-                nn.Linear(self.stock_attention_dim, self.stock_attention_dim),
-            )
-            self.cash_prev_weight_mlp = nn.Sequential(
-                nn.Linear(self.stock_attention_dim + 1, self.stock_attention_dim),
-                nn.GELU(),
-                nn.Dropout(config.dropout),
-                nn.Linear(self.stock_attention_dim, self.stock_attention_dim),
-            )
+            if self.use_prev_weight_feature:
+                self.stock_prev_weight_mlp = nn.Sequential(
+                    nn.Linear(self.stock_attention_dim + 1, self.stock_attention_dim),
+                    nn.GELU(),
+                    nn.Dropout(config.dropout),
+                    nn.Linear(self.stock_attention_dim, self.stock_attention_dim),
+                )
+                self.cash_prev_weight_mlp = nn.Sequential(
+                    nn.Linear(self.stock_attention_dim + 1, self.stock_attention_dim),
+                    nn.GELU(),
+                    nn.Dropout(config.dropout),
+                    nn.Linear(self.stock_attention_dim, self.stock_attention_dim),
+                )
+            else:
+                self.stock_prev_weight_mlp = None
+                self.cash_prev_weight_mlp = None
         elif self.stock_cross_sectional_encoder_type == "mlp":
             stock_feature_width = (
                 config.stock_temporal_dim * 2
@@ -644,10 +649,15 @@ class PortfolioAttentionModel(nn.Module):
             or self.stock_cross_attention_score is None
             or self.cash_cross_attention_score is None
             or self.cash_state_mlp_base is None
-            or self.stock_prev_weight_mlp is None
-            or self.cash_prev_weight_mlp is None
         ):
             raise RuntimeError("Self-attention cross-sectional scorer modules must be initialized.")
+        if self.use_prev_weight_feature and (
+            self.stock_prev_weight_mlp is None or self.cash_prev_weight_mlp is None
+        ):
+            raise RuntimeError(
+                "Self-attention prev-weight feature modules must be initialized when "
+                "use_prev_weight_feature=True."
+            )
 
         stock_content_inputs = torch.cat(
             [
@@ -696,6 +706,28 @@ class PortfolioAttentionModel(nn.Module):
             num_stocks,
             self.stock_attention_dim,
         )
+        if not self.use_prev_weight_feature:
+            # Ablation path: logits scoring fully bypasses previous-allocation features and
+            # does not enter the sequential per-time-step prev_weight loop.
+            stock_logits = self.stock_cross_attention_score(attended_stock).squeeze(-1)
+            cash_base_input = attended_stock.mean(dim=2)
+            cash_state_base = self.cash_state_mlp_base(cash_base_input)
+            cash_logit = self.cash_cross_attention_score(cash_state_base).squeeze(-1)
+            assert stock_logits.shape == (num_scenarios, time_steps, num_stocks)
+            assert cash_logit.shape == (num_scenarios, time_steps)
+            return (
+                stock_logits,
+                cash_logit,
+                {
+                    "stock_feature_shape": tuple(stock_attention_inputs.shape),
+                    "stock_content_shape": tuple(stock_content.shape),
+                    "stock_attention_input_shape": tuple(stock_attention_inputs.shape),
+                    "stock_attention_weight_shape": tuple(attention_weights.shape),
+                    "used_prev_weight_feature": False,
+                },
+                None,
+            )
+
         if initial_allocation is None:
             prev_weight = self._initial_allocation(
                 num_scenarios=num_scenarios,
@@ -765,6 +797,7 @@ class PortfolioAttentionModel(nn.Module):
                 "stock_content_shape": tuple(stock_content.shape),
                 "stock_attention_input_shape": tuple(stock_attention_inputs.shape),
                 "stock_attention_weight_shape": tuple(attention_weights.shape),
+                "used_prev_weight_feature": True,
             },
             precomputed_smoothing,
         )
@@ -904,6 +937,7 @@ class PortfolioAttentionModel(nn.Module):
             "stock_temporal_attention_window": self.stock_temporal_attention_window,
             "allocation_smoothing_alpha": self.allocation_smoothing_alpha,
             "detach_prev_weight": self.detach_prev_weight,
+            "use_prev_weight_feature": self.use_prev_weight_feature,
             "initial_allocation_mode": self.initial_allocation_mode,
             "initial_random_concentration": self.initial_random_concentration,
             "stock_current_shape": tuple(stock_current.shape),

@@ -7,11 +7,11 @@ from typing import Any
 import pandas as pd
 import torch
 
-from portfolio_attention.cli import evaluate_rebuild
 from portfolio_attention.config import PathsConfig
 from portfolio_attention.evaluation import (
     artifacts as evaluation_artifacts,
     presentation as evaluation_presentation,
+    rebuild as evaluation_rebuild,
     shared as evaluation_shared,
 )
 
@@ -66,24 +66,24 @@ def format_allocation_group_label(grouped_allocation: dict[str, object]) -> str:
 
 
 def refresh_existing_scenario_artifacts(*args, **kwargs):
-    return evaluate_rebuild.refresh_existing_scenario_artifacts(*args, **kwargs)
+    return evaluation_rebuild.refresh_existing_scenario_artifacts(*args, **kwargs)
 
 
 def rebuild_monitoring_holdout_backtest_overviews(*args, **kwargs):
-    return evaluate_rebuild.rebuild_monitoring_holdout_backtest_overviews(*args, **kwargs)
+    return evaluation_rebuild.rebuild_monitoring_holdout_backtest_overviews(*args, **kwargs)
 
 
 def cleanup_monitoring_holdout_backtest_artifacts(*, paths: PathsConfig, state: str) -> None:
-    evaluate_rebuild.cleanup_monitoring_holdout_backtest_artifacts(paths=paths, state=state)
+    evaluation_rebuild.cleanup_monitoring_holdout_backtest_artifacts(paths=paths, state=state)
 
 
 def rebuild_multi_loss_weight_trajectory_overviews(*args, **kwargs):
-    return evaluate_rebuild.rebuild_multi_loss_weight_trajectory_overviews(*args, **kwargs)
+    return evaluation_rebuild.rebuild_multi_loss_weight_trajectory_overviews(*args, **kwargs)
 
 
 def cleanup_multi_loss_weight_trajectory_overviews(*, paths: PathsConfig, state: str) -> None:
-    evaluate_rebuild.cleanup_multi_loss_weight_trajectory_overviews(paths=paths, state=state)
+    evaluation_rebuild.cleanup_multi_loss_weight_trajectory_overviews(paths=paths, state=state)
 
 
 def backfill_monitoring_holdout_backtest_overviews(*args, **kwargs):
-    return evaluate_rebuild.backfill_monitoring_holdout_backtest_overviews(*args, **kwargs)
+    return evaluation_rebuild.backfill_monitoring_holdout_backtest_overviews(*args, **kwargs)

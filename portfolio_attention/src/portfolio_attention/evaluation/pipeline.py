@@ -13,15 +13,11 @@ from ..artifact import paths as artifact_paths
 from ..config import (
     DataConfig,
     EvaluationConfig,
-    ModelConfig,
     PathsConfig,
 )
 from ..config.validation import (
-    normalize_model_config_dict,
-    raise_if_checkpoint_uses_legacy_stock_id_representation_type,
     validated_data_config,
     validated_evaluation_config,
-    validated_model_config,
 )
 from ..data.dataset import PortfolioPanelDataset
 from .artifacts import (
@@ -31,70 +27,14 @@ from .artifacts import (
     extract_exported_train_config,
     strip_transient_scenario_tensor_fields,
 )
+from .checkpoints import (
+    _build_data_config_from_checkpoint,
+    _build_model_config_from_checkpoint,
+    _resolve_checkpoint_path,
+)
 from .runtime import _collect_holdout_per_scenario_payloads
 from ..model import PortfolioAttentionModel
 from ..common.utils import ensure_output_dirs, resolve_device, save_json, set_seed
-
-
-def _resolve_checkpoint_state(data_config: DataConfig) -> str | None:
-    return data_config.state
-
-
-def _resolve_checkpoint_path(
-    *,
-    paths: PathsConfig,
-    data_config: DataConfig,
-    checkpoint_path: Path | None,
-    loss_name: str | None,
-) -> Path:
-    return checkpoint_path or artifact_paths.train_best_checkpoint_path(
-        paths,
-        loss_name or "dsr",
-        state=_resolve_checkpoint_state(data_config),
-    )
-
-
-def _build_model_config_from_checkpoint(checkpoint: dict[str, Any]) -> ModelConfig:
-    checkpoint_model_config = checkpoint.get("model_config", {})
-    if not isinstance(checkpoint_model_config, dict):
-        raise ValueError("Checkpoint model_config payload must be a dictionary.")
-    raise_if_checkpoint_uses_legacy_stock_id_representation_type(
-        checkpoint_model_config,
-        context="Checkpoint model_config",
-    )
-    if "stock_temporal_encoder_type" not in checkpoint_model_config:
-        raise ValueError(
-            "Checkpoint model_config is missing 'stock_temporal_encoder_type'. "
-            "This checkpoint was saved with an older architecture and is not compatible with the current model."
-        )
-    normalized_model_config = normalize_model_config_dict(checkpoint_model_config)
-    filtered_config_dict = {
-        key: value
-        for key, value in normalized_model_config.items()
-        if key in ModelConfig.__dataclass_fields__
-    }
-    return validated_model_config(ModelConfig(**filtered_config_dict))
-
-
-def _build_data_config_from_checkpoint(
-    checkpoint: dict[str, Any],
-    *,
-    fallback_data_config: DataConfig,
-) -> DataConfig:
-    checkpoint_data_config = checkpoint.get("data_config", {})
-    if not isinstance(checkpoint_data_config, dict):
-        return fallback_data_config
-    filtered_config_dict = {
-        key: value
-        for key, value in checkpoint_data_config.items()
-        if key in DataConfig.__dataclass_fields__
-    }
-    if not filtered_config_dict:
-        return validated_data_config(fallback_data_config)
-
-    fallback_dict = fallback_data_config.__dict__.copy()
-    fallback_dict.update(filtered_config_dict)
-    return validated_data_config(DataConfig(**fallback_dict))
 
 
 def _validate_checkpoint_metadata(checkpoint: dict[str, Any], dataset: PortfolioPanelDataset) -> None:

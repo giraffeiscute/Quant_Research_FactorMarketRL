@@ -23,7 +23,7 @@ from ..config.validation import (
     validated_train_config,
 )
 from ..data.dataset import PortfolioPanelDataset
-from portfolio_attention.cli.evaluate_rebuild import (
+from ..evaluation.rebuild import (
     cleanup_monitoring_holdout_backtest_artifacts,
     cleanup_multi_loss_weight_trajectory_overviews,
     rebuild_monitoring_holdout_backtest_overviews,

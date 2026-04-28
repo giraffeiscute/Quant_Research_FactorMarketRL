@@ -125,6 +125,7 @@ class ModelConfig:
     market_temporal_dim: int = 16
     stock_temporal_dim: int = 16
     cross_sectional_dim: int = 16
+    dropout: float = 0.1
     stock_id_representation_type: Literal["learning", "gaussian"] = "learning"
     stock_id_embedding_dim: int = 16
     stock_embedding_type: Literal["concat", "pre_temporal"] = "pre_temporal"
@@ -134,8 +135,8 @@ class ModelConfig:
     allocation_smoothing_alpha: float = 1
     initial_allocation_mode: Literal["equal_weight", "random_dirichlet"] = "random_dirichlet"
     initial_random_concentration: float = 1.0
-    detach_prev_weight: bool = True
-    dropout: float = 0.1
+    detach_prev_weight: bool = False
+    use_prev_weight_feature: bool = True
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -147,7 +148,7 @@ class TrainConfig:
 
     seed: int = 42
     learning_rate: float = 1e-4
-    num_epochs: int = 1
+    num_epochs: int = 2
     weight_decay: float = 1e-3
     grad_clip_norm: float = 1.0
     early_stopping_patience: int = 5

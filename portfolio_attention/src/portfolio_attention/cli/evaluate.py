@@ -9,24 +9,22 @@ from typing import Any
 
 import torch
 
-from portfolio_attention.artifact import paths as artifact_paths
-from portfolio_attention.cli import evaluate_rebuild
 from portfolio_attention.config import (
     DataConfig,
     ModelConfig,
     PathsConfig,
 )
 from portfolio_attention.config.validation import (
-    normalize_model_config_dict,
-    raise_if_checkpoint_uses_legacy_stock_id_representation_type,
     validated_data_config,
     validated_model_config,
 )
 from portfolio_attention.evaluation import (
     artifacts as evaluation_artifacts,
+    checkpoints as evaluation_checkpoints,
     monitoring as evaluation_monitoring,
     pipeline as evaluation_pipeline,
     presentation as evaluation_presentation,
+    rebuild as evaluation_rebuild,
     runtime as evaluation_runtime,
     shared as evaluation_shared,
 )
@@ -54,146 +52,18 @@ _load_aux_frame = evaluation_presentation.load_aux_frame
 _validate_checkpoint_metadata = evaluation_pipeline._validate_checkpoint_metadata
 format_allocation_group_label = evaluation_presentation.format_allocation_group_label
 _normalize_overview_loss_order = evaluation_shared.normalize_overview_loss_order
+_resolve_checkpoint_state = evaluation_checkpoints._resolve_checkpoint_state
+_resolve_checkpoint_path = evaluation_checkpoints._resolve_checkpoint_path
+_resolve_checkpoint_metadata_dict = evaluation_checkpoints._resolve_checkpoint_metadata_dict
+_build_model_config_from_checkpoint = evaluation_checkpoints._build_model_config_from_checkpoint
+_build_data_config_from_checkpoint = evaluation_checkpoints._build_data_config_from_checkpoint
+_validate_requested_runtime_configs_against_checkpoint = (
+    evaluation_checkpoints._validate_requested_runtime_configs_against_checkpoint
+)
 rebuild_monitoring_holdout_backtest_overviews = (
-    evaluate_rebuild.rebuild_monitoring_holdout_backtest_overviews
+    evaluation_rebuild.rebuild_monitoring_holdout_backtest_overviews
 )
 run_monitoring_holdout_backtest = evaluation_monitoring.run_monitoring_holdout_backtest
-
-
-def _resolve_checkpoint_state(data_config: DataConfig) -> str | None:
-    return data_config.state
-
-
-def _resolve_checkpoint_path(
-    *,
-    paths: PathsConfig,
-    data_config: DataConfig,
-    checkpoint_path: Path | None,
-    loss_name: str | None,
-) -> Path:
-    return checkpoint_path or artifact_paths.train_best_checkpoint_path(
-        paths,
-        loss_name or "dsr",
-        state=_resolve_checkpoint_state(data_config),
-    )
-
-
-def _resolve_checkpoint_metadata_dict(
-    checkpoint: dict[str, Any],
-    key: str,
-) -> Any:
-    checkpoint_payload = checkpoint.get(key)
-    if checkpoint_payload:
-        return checkpoint_payload
-    checkpoint_metadata = checkpoint.get("portfolio_attention_metadata", {})
-    if not isinstance(checkpoint_metadata, dict):
-        return checkpoint_payload
-    return checkpoint_metadata.get(key, checkpoint_payload)
-
-
-def _build_model_config_from_checkpoint(checkpoint: dict[str, Any]) -> ModelConfig:
-    checkpoint_model_config = _resolve_checkpoint_metadata_dict(checkpoint, "model_config")
-    if checkpoint_model_config is None:
-        checkpoint_model_config = {}
-    if not isinstance(checkpoint_model_config, dict):
-        raise ValueError("Checkpoint model_config payload must be a dictionary.")
-    raise_if_checkpoint_uses_legacy_stock_id_representation_type(
-        checkpoint_model_config,
-        context="Checkpoint model_config",
-    )
-    if "stock_temporal_encoder_type" not in checkpoint_model_config:
-        raise ValueError(
-            "Checkpoint model_config is missing 'stock_temporal_encoder_type'. "
-            "This checkpoint was saved with an older architecture and is not compatible with the current model."
-        )
-    normalized_model_config = normalize_model_config_dict(checkpoint_model_config)
-    filtered_config_dict = {
-        key: value
-        for key, value in normalized_model_config.items()
-        if key in ModelConfig.__dataclass_fields__
-    }
-    return validated_model_config(ModelConfig(**filtered_config_dict))
-
-
-def _build_data_config_from_checkpoint(
-    checkpoint: dict[str, Any],
-    *,
-    fallback_data_config: DataConfig,
-) -> DataConfig:
-    checkpoint_data_config = _resolve_checkpoint_metadata_dict(checkpoint, "data_config")
-    if not isinstance(checkpoint_data_config, dict):
-        return fallback_data_config
-    filtered_config_dict = {
-        key: value
-        for key, value in checkpoint_data_config.items()
-        if key in DataConfig.__dataclass_fields__
-    }
-    if not filtered_config_dict:
-        return validated_data_config(fallback_data_config)
-
-    fallback_dict = fallback_data_config.__dict__.copy()
-    fallback_dict.update(filtered_config_dict)
-    return validated_data_config(DataConfig(**fallback_dict))
-
-
-def _validate_requested_runtime_configs_against_checkpoint(
-    *,
-    requested_data_config: DataConfig,
-    requested_model_config: ModelConfig,
-    checkpoint: dict[str, Any],
-    args_dict: dict[str, Any],
-) -> None:
-    checkpoint_data_config = _build_data_config_from_checkpoint(
-        checkpoint,
-        fallback_data_config=requested_data_config,
-    )
-    checkpoint_model_config = _build_model_config_from_checkpoint(checkpoint)
-
-    if "num_stocks" in args_dict and checkpoint_data_config.num_stocks != requested_data_config.num_stocks:
-        raise ValueError(
-            "Requested num_stocks does not match the checkpoint data configuration. "
-            f"checkpoint={checkpoint_data_config.num_stocks} requested={requested_data_config.num_stocks}"
-        )
-    if (
-        "stock_id_representation_type" in args_dict
-        and checkpoint_model_config.stock_id_representation_type
-        != requested_model_config.stock_id_representation_type
-    ):
-        raise ValueError(
-            "Requested stock_id_representation_type does not match the checkpoint model configuration. "
-            f"checkpoint={checkpoint_model_config.stock_id_representation_type!r} "
-            f"requested={requested_model_config.stock_id_representation_type!r}"
-        )
-    if (
-        "stock_embedding_type" in args_dict
-        and checkpoint_model_config.stock_embedding_type
-        != requested_model_config.stock_embedding_type
-    ):
-        raise ValueError(
-            "Requested stock_embedding_type does not match the checkpoint model configuration. "
-            f"checkpoint={checkpoint_model_config.stock_embedding_type!r} "
-            f"requested={requested_model_config.stock_embedding_type!r}"
-        )
-    if (
-        "stock_temporal_encoder_type" in args_dict
-        and checkpoint_model_config.stock_temporal_encoder_type
-        != requested_model_config.stock_temporal_encoder_type
-    ):
-        raise ValueError(
-            "Requested stock_temporal_encoder_type does not match the checkpoint model configuration. "
-            f"checkpoint={checkpoint_model_config.stock_temporal_encoder_type!r} "
-            f"requested={requested_model_config.stock_temporal_encoder_type!r}"
-        )
-    if (
-        "stock_cross_sectional_encoder_type" in args_dict
-        and checkpoint_model_config.stock_cross_sectional_encoder_type
-        != requested_model_config.stock_cross_sectional_encoder_type
-    ):
-        raise ValueError(
-            "Requested stock_cross_sectional_encoder_type does not match the checkpoint model configuration. "
-            f"checkpoint={checkpoint_model_config.stock_cross_sectional_encoder_type!r} "
-            f"requested={requested_model_config.stock_cross_sectional_encoder_type!r}"
-        )
 
 
 def _format_terminal_summary(payload: dict[str, Any]) -> str:
@@ -351,7 +221,7 @@ def main() -> None:
             )
         if args.loss is not None:
             raise ValueError("--loss cannot be used with --backfill-monitoring-holdout-overviews.")
-        generated_paths = evaluate_rebuild.backfill_monitoring_holdout_backtest_overviews(
+        generated_paths = evaluation_rebuild.backfill_monitoring_holdout_backtest_overviews(
             paths=paths,
             output_dirs=args.monitoring_output_dir,
         )
@@ -364,7 +234,7 @@ def main() -> None:
             raise ValueError(
                 "--monitoring-output-dir cannot be used with --refresh-existing-scenario-artifacts."
             )
-        payloads = evaluate_rebuild.refresh_existing_scenario_artifacts(
+        payloads = evaluation_rebuild.refresh_existing_scenario_artifacts(
             paths=paths,
             run_evaluation_fn=evaluation_pipeline.run_evaluation,
             device_name=args.device,

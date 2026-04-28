@@ -10,7 +10,6 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from ..artifact import paths as artifact_paths
-from ..artifact import run_metadata
 from . import shared as evaluation_shared
 from ..config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
 from ..data.dataset import PortfolioPanelDataset
@@ -21,7 +20,7 @@ from .artifacts import (
     strip_monitoring_transient_tensor_fields,
 )
 from .presentation import build_monitoring_grouped_weight_trajectories
-from ..cli.evaluate_rebuild import rebuild_monitoring_holdout_backtest_overviews
+from .rebuild import rebuild_monitoring_holdout_backtest_overviews
 from .runtime import _collect_holdout_per_scenario_payloads
 from ..model import PortfolioAttentionModel
 from ..common.utils import ensure_output_dirs, save_json
@@ -77,76 +76,6 @@ def _save_runtime_config_snapshot(
         "train_config": _serialize_runtime_config(train_config),
     }
     save_json(payload, _runtime_config_snapshot_path(paths, state, loss_name))
-
-
-def _set_scenario_artifacts_overview_path(
-    payload: dict[str, Any],
-    *,
-    scenario_id: str | None,
-    overview_path: str | None,
-) -> bool:
-    return run_metadata.set_scenario_artifacts_overview_path(
-        payload,
-        scenario_id=scenario_id,
-        overview_path=overview_path,
-    )
-
-
-def _update_metrics_payload_overview_path(
-    payload_path: Path,
-    *,
-    state: str,
-    scenario_id: str | None,
-    overview_path: str | None,
-) -> None:
-    if not payload_path.exists():
-        return
-    payload = evaluation_shared.PersistedArtifactLoader.load_json_object(payload_path)
-    if run_metadata.update_payload_overview_paths(
-        payload,
-        state=state,
-        scenario_id=scenario_id,
-        overview_path=overview_path,
-    ):
-        save_json(payload, payload_path)
-
-
-def _update_monitoring_manifest_overview_paths(
-    manifest_payload: dict[str, Any],
-    *,
-    overview_path_by_scenario: dict[str, str],
-    loss_order: tuple[str, ...],
-) -> bool:
-    return run_metadata.update_monitoring_manifest_overview_paths(
-        manifest_payload,
-        overview_path_by_scenario=overview_path_by_scenario,
-        loss_order=loss_order,
-    )
-
-
-def _resolve_payload_state(payload: dict[str, Any]) -> str:
-    return run_metadata.resolve_payload_state(payload)
-
-
-def _update_train_metrics_monitoring_overview_paths(
-    payload_path: Path,
-    *,
-    state: str,
-    epoch: int,
-    holdout_backtest_output_dir: str,
-    overview_paths: list[str],
-) -> None:
-    if not payload_path.exists():
-        return
-    payload = evaluation_shared.PersistedArtifactLoader.load_json_object(payload_path)
-    if run_metadata.update_train_metrics_history_overview_paths(
-        payload,
-        state=state,
-        epoch=epoch,
-        holdout_backtest_output_dir=holdout_backtest_output_dir,
-        overview_paths=overview_paths,
-    ):
-        save_json(payload, payload_path)
 
 
 def compute_monitoring_holdout_backtest_payload(
