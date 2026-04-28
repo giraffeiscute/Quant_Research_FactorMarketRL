@@ -86,7 +86,7 @@ class DataConfig:
     # Rolling window
     lookback_days: int = 50
     rolling_horizon_days: int = 30
-    rolling_stride_days: int = 80
+    rolling_stride_days: int = 2
     rolling_train_dataset_mode: Literal["lazy", "eager"] = "lazy"
     price_normalization_mode: Literal["none", "relative_to_anchor"] = "relative_to_anchor"
 
@@ -135,8 +135,8 @@ class ModelConfig:
     allocation_smoothing_alpha: float = 1
     initial_allocation_mode: Literal["equal_weight", "random_dirichlet"] = "random_dirichlet"
     initial_random_concentration: float = 1.0
-    detach_prev_weight: bool = False
-    use_prev_weight_feature: bool = True
+    detach_prev_weight: bool = True
+    use_prev_weight_feature: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -148,7 +148,7 @@ class TrainConfig:
 
     seed: int = 42
     learning_rate: float = 1e-4
-    num_epochs: int = 2
+    num_epochs: int = 10
     weight_decay: float = 1e-3
     grad_clip_norm: float = 1.0
     early_stopping_patience: int = 5
