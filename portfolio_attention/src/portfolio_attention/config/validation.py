@@ -305,6 +305,11 @@ def validate_model_config(config: ModelConfig) -> None:
             "ModelConfig.use_prev_weight_feature must be a bool, "
             f"received {config.use_prev_weight_feature!r}."
         )
+    if not config.use_prev_weight_feature and config.detach_prev_weight:
+        raise ValueError(
+            "ModelConfig.detach_prev_weight must be False when "
+            "ModelConfig.use_prev_weight_feature is False."
+        )
 
 
 def validate_train_config(config: TrainConfig) -> None:
