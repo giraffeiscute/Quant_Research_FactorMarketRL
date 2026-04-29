@@ -226,6 +226,12 @@ def _validate_resume_checkpoint(
     checkpoint_data_config = checkpoint.get("data_config", {})
     if not isinstance(checkpoint_data_config, dict):
         raise ValueError(f"Resume checkpoint has invalid data_config payload: {checkpoint_path}")
+    if "num_stocks" in checkpoint_data_config:
+        raise ValueError(
+            "Resume checkpoint data_config contains legacy key 'num_stocks'. "
+            "Use DataConfig.sample_num_stocks for training sampling; full stock universe size "
+            "is inferred from scenario data and cannot be manually specified."
+        )
     current_data_config = _serialize_config(data_config)
     for key, expected_value in current_data_config.items():
         if checkpoint_data_config.get(key) != expected_value:

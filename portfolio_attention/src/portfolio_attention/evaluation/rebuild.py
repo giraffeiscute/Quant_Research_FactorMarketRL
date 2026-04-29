@@ -100,6 +100,12 @@ def _build_refresh_data_config(
             "Refresh only supports rolling-window metadata, "
             f"received lookback_mode={resolved_lookback_mode!r}."
         )
+    if "num_stocks" in metadata:
+        raise ValueError(
+            "Refresh metadata contains legacy key 'num_stocks'. "
+            "Use sample_num_stocks for training sampling; full stock universe size is "
+            "inferred from scenario data and cannot be manually specified."
+        )
     return DataConfig(
         state=source_path.parent.name,
         scenario_dir=source_path.parent,
@@ -129,10 +135,13 @@ def _build_refresh_data_config(
         price_normalization_mode=str(
             metadata.get("price_normalization_mode", default_config.price_normalization_mode)
         ),
-        num_stocks=int(
+        sample_num_stocks=int(
             metadata.get(
-                "selected_num_stocks",
-                evaluation_shared.parse_num_stocks_from_source_path(source_path),
+                "sample_num_stocks",
+                metadata.get(
+                    "selected_num_stocks",
+                    evaluation_shared.parse_num_stocks_from_source_path(source_path),
+                ),
             )
         ),
     )
@@ -722,5 +731,3 @@ def backfill_monitoring_holdout_backtest_overviews(
         output_dirs=resolved_output_dirs,
         loss_order=loss_order,
     )
-
-

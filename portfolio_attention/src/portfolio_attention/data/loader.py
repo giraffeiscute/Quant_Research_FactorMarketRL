@@ -89,7 +89,6 @@ def materialize_scenario_arrays(
     scenario_record: ScenarioFileRecord,
     reference_stock_ids: list[str],
     reference_time_index_array: np.ndarray,
-    selected_stock_indices: np.ndarray,
     parsed_t: int,
     raise_if_interrupted: Callable[[], None] | None = None,
 ) -> LoadedScenarioArrays:
@@ -161,7 +160,7 @@ def materialize_scenario_arrays(
         record=scenario_record,
         stock_ids=prepared.stock_ids,
         time_index=prepared.time_index,
-        stock_features_raw=stock_features_raw[:, selected_stock_indices, :],
+        stock_features_raw=stock_features_raw,
         market_features_raw=market_features_raw,
-        stock_returns_raw=stock_returns_raw[:, selected_stock_indices],
+        stock_returns_raw=stock_returns_raw,
     )

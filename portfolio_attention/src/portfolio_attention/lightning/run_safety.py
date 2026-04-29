@@ -119,6 +119,30 @@ def _destroy_distributed_process_group_if_initialized() -> None:
         return
 
 
+def _trainer_was_interrupted(trainer: Any) -> bool:
+    if bool(getattr(trainer, "interrupted", False)):
+        return True
+    state = getattr(trainer, "state", None)
+    status = getattr(state, "status", None)
+    if status is None:
+        return False
+    status_name = getattr(status, "name", None)
+    if isinstance(status_name, str):
+        return status_name.upper() == "INTERRUPTED"
+    return str(status).upper().endswith("INTERRUPTED")
+
+
+def _exception_represents_interrupt(exc: BaseException) -> bool:
+    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        return True
+    text = " ".join(str(exc).split()).lower()
+    if "keyboardinterrupt" in text:
+        return True
+    if "terminated with code 130" in text:
+        return True
+    return False
+
+
 def _configure_warning_routing(state: str, paths: PathsConfig) -> None:
     warning_log_path = paths.get_state_logs_dir(state) / "warning.log"
     warning_log_path.parent.mkdir(parents=True, exist_ok=True)

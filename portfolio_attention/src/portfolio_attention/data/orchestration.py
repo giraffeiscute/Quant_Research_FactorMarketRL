@@ -33,6 +33,7 @@ from .standardization import (
     scale_stock_features_for_context,
 )
 from .scenario_split import discover_scenario_records, scenario_sort_key, split_scenario_records
+from .stock_sampling import coverage_cycle_stock_indices, validate_sample_num_stocks
 from .torch_datasets import RollingTrainWindowDataset, ScenarioSegmentDataset
 from .windows import context_bounds_for, resolve_time_window_layout, score_target_bounds_for
 
@@ -187,10 +188,12 @@ class PortfolioPanelDataset:
             }
             self.reference_time_index = list(time_index)
             self.reference_time_index_array = np.asarray(self.reference_time_index, dtype=np.int64)
-            self.selected_stock_indices = self._resolve_selected_stock_indices(len(stock_ids))
-            self.selected_stock_ids = [
-                stock_ids[index] for index in self.selected_stock_indices.tolist()
-            ]
+            self.selected_stock_indices = np.arange(len(stock_ids), dtype=np.int64)
+            self.selected_stock_ids = list(stock_ids)
+            self.sample_num_stocks = validate_sample_num_stocks(
+                int(self.config.sample_num_stocks),
+                len(self.reference_stock_ids),
+            )
             self._resolve_time_segment_lengths(self.parsed_t)
             return
 
@@ -208,18 +211,10 @@ class PortfolioPanelDataset:
         if time_index != self.reference_time_index:
             raise ValueError("All scenarios must share the same time index ordering after sorting.")
 
-    def _resolve_selected_stock_indices(self, actual_num_stocks: int) -> np.ndarray:
-        requested_num_stocks = self.config.num_stocks
-        if requested_num_stocks is None:
-            return np.arange(actual_num_stocks, dtype=np.int64)
-        if requested_num_stocks <= 0:
-            raise ValueError("DataConfig.num_stocks must be positive when provided.")
-        if requested_num_stocks > actual_num_stocks:
-            raise ValueError(
-                f"Requested fixed num_stocks={requested_num_stocks}, "
-                f"but scenario data only provides {actual_num_stocks} stocks."
-            )
-        return np.arange(requested_num_stocks, dtype=np.int64)
+    def _stock_sampling_base_seed(self) -> int:
+        if self.config.shuffle_train_scenarios_seed is not None:
+            return int(self.config.shuffle_train_scenarios_seed)
+        return int(self.config.scenario_split_seed)
 
     def _resolve_time_segment_lengths(self, total_time_steps: int) -> None:
         layout = resolve_time_window_layout(
@@ -248,7 +243,6 @@ class PortfolioPanelDataset:
             scenario_record=scenario_record,
             reference_stock_ids=self.reference_stock_ids,
             reference_time_index_array=self.reference_time_index_array,
-            selected_stock_indices=self.selected_stock_indices,
             parsed_t=self.parsed_t,
             raise_if_interrupted=self._raise_if_interrupted,
         )
@@ -401,10 +395,17 @@ class PortfolioPanelDataset:
                 feature_stop = feature_start + window_length
                 if feature_stop + 1 > self.train_segment_end_index:
                     raise ValueError("Rolling train window exceeds the train segment boundary.")
+                window_ordinal = len(self._train_window_index)
                 self._train_window_index.append((scenario_record.scenario_id, feature_start))
                 if not self._use_lazy_rolling_train_dataset():
                     score_target_start = feature_start + int(self.config.lookback_days) + 1
                     score_target_stop = feature_stop + 1
+                    sampled_stock_indices = coverage_cycle_stock_indices(
+                        window_ordinal=window_ordinal,
+                        sample_num_stocks=self.sample_num_stocks,
+                        full_num_stocks=len(self.selected_stock_ids),
+                        base_seed=self._stock_sampling_base_seed(),
+                    )
                     self.train_segment_records.append(
                         self._build_segment_record_from_bounds(
                             arrays,
@@ -413,6 +414,7 @@ class PortfolioPanelDataset:
                             context_feature_stop=feature_stop,
                             score_target_start=score_target_start,
                             score_target_stop=score_target_stop,
+                            stock_indices=sampled_stock_indices,
                         )
                     )
             self._scenario_arrays_cache.pop(scenario_record.scenario_id, None)
@@ -426,6 +428,7 @@ class PortfolioPanelDataset:
         context_feature_stop: int,
         score_target_start: int,
         score_target_stop: int,
+        stock_indices: np.ndarray | None = None,
     ) -> ScenarioSegmentRecord:
         context_target_start = context_feature_start + 1
         context_target_stop = context_feature_stop + 1
@@ -433,8 +436,13 @@ class PortfolioPanelDataset:
             raise RuntimeError("Stock scaler statistics must be fitted before segment construction.")
         if self.market_scaler.mean is None or self.market_scaler.std is None:
             raise RuntimeError("Market scaler statistics must be fitted before segment construction.")
+        resolved_stock_indices = (
+            np.arange(len(self.selected_stock_ids), dtype=np.int64)
+            if stock_indices is None
+            else np.asarray(stock_indices, dtype=np.int64)
+        )
         scaled_stock = scale_stock_features_for_context(
-            arrays.stock_features_raw,
+            arrays.stock_features_raw[:, resolved_stock_indices, :],
             context_feature_start=context_feature_start,
             context_feature_stop=context_feature_stop,
             price_normalization_mode=str(self.config.price_normalization_mode),
@@ -445,11 +453,11 @@ class PortfolioPanelDataset:
 
         x_stock = scaled_stock
         x_market = scaled_market[context_feature_start:context_feature_stop]
-        r_stock = arrays.stock_returns_raw[context_target_start:context_target_stop]
+        r_stock = arrays.stock_returns_raw[context_target_start:context_target_stop, resolved_stock_indices]
         x_stock_raw = None
         if split_name in {"validation", "test"}:
             x_stock_raw = _slice_stock_features_for_context(
-                arrays.stock_features_raw,
+                arrays.stock_features_raw[:, resolved_stock_indices, :],
                 context_feature_start=context_feature_start,
                 context_feature_stop=context_feature_stop,
             )
@@ -465,16 +473,17 @@ class PortfolioPanelDataset:
             (target_time_indices >= int(arrays.time_index[score_target_start]))
             & (target_time_indices <= int(arrays.time_index[score_target_stop - 1]))
         )
-        stock_indices = np.arange(len(self.selected_stock_ids), dtype=np.int64)
+        record_stock_indices = resolved_stock_indices
 
         expected_time_steps = context_feature_stop - context_feature_start
+        expected_num_stocks = int(resolved_stock_indices.shape[0])
         assert x_stock.shape == (
             expected_time_steps,
-            len(self.selected_stock_ids),
+            expected_num_stocks,
             len(STOCK_FEATURE_COLUMNS),
         )
         assert x_market.shape == (expected_time_steps, len(MARKET_FEATURE_COLUMNS))
-        assert r_stock.shape == (expected_time_steps, len(self.selected_stock_ids))
+        assert r_stock.shape == (expected_time_steps, expected_num_stocks)
         assert feature_time_indices.shape == target_time_indices.shape == (expected_time_steps,)
         assert score_mask.shape == (expected_time_steps,)
         if x_stock_raw is not None:
@@ -492,7 +501,7 @@ class PortfolioPanelDataset:
             x_stock=x_stock.astype(np.float32),
             x_market=x_market.astype(np.float32),
             r_stock=r_stock.astype(np.float32),
-            stock_indices=stock_indices,
+            stock_indices=record_stock_indices.astype(np.int64),
             x_stock_raw=None if x_stock_raw is None else x_stock_raw.astype(np.float32),
         )
 
@@ -632,6 +641,7 @@ class PortfolioPanelDataset:
             rolling_train_dataset_mode=str(self.config.rolling_train_dataset_mode),
             train_batch_size=int(self.config.train_batch_size),
             shuffle_train_scenarios=bool(self.config.shuffle_train_scenarios),
+            sample_num_stocks=int(self.sample_num_stocks),
             selected_num_stocks=len(self.selected_stock_ids),
             parsed_n=self.parsed_n,
             parsed_t=self.parsed_t,
@@ -659,6 +669,8 @@ class PortfolioPanelDataset:
                 price_normalization_mode=str(self.config.price_normalization_mode),
                 stock_scaler_mean=self.stock_scaler.mean,
                 stock_scaler_std=self.stock_scaler.std,
+                sample_num_stocks=int(self.sample_num_stocks),
+                stock_sampling_base_seed=self._stock_sampling_base_seed(),
             )
         else:
             train_dataset = ScenarioSegmentDataset(list(self.train_segment_records))
@@ -692,6 +704,8 @@ class PortfolioPanelDataset:
                     price_normalization_mode=str(self.config.price_normalization_mode),
                     stock_scaler_mean=self.stock_scaler.mean,
                     stock_scaler_std=self.stock_scaler.std,
+                    sample_num_stocks=int(self.sample_num_stocks),
+                    stock_sampling_base_seed=self._stock_sampling_base_seed(),
                 )
             return ScenarioSegmentDataset(list(self.train_segment_records))
         if split_name == "validation":

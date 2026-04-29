@@ -126,6 +126,7 @@ class ScenarioDatasetMetadata:
     rolling_train_dataset_mode: str
     train_batch_size: int
     shuffle_train_scenarios: bool
+    sample_num_stocks: int
     selected_num_stocks: int
     parsed_n: int
     parsed_t: int

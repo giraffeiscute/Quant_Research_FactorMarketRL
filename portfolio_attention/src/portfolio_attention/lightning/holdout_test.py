@@ -6,7 +6,6 @@ import argparse
 import os
 from pathlib import Path
 import re
-import signal
 from typing import Any, Callable
 
 import pytorch_lightning as pl
@@ -37,6 +36,12 @@ if __package__ is None or __package__ == "":
         PortfolioLightningModule,
         _configure_warning_routing,
     )
+    from portfolio_attention.lightning.distributed import sync_bool_flag_across_initialized_ranks
+    from portfolio_attention.lightning.run_safety import (
+        GracefulInterruptController,
+        _destroy_distributed_process_group_if_initialized,
+        _exception_represents_interrupt,
+    )
     from portfolio_attention.cli.train import (
         build_arg_parser,
         resolve_model_config_from_args,
@@ -64,6 +69,12 @@ else:
         LightningTrainDataModule,
         PortfolioLightningModule,
         _configure_warning_routing,
+    )
+    from .distributed import sync_bool_flag_across_initialized_ranks
+    from .run_safety import (
+        GracefulInterruptController,
+        _destroy_distributed_process_group_if_initialized,
+        _exception_represents_interrupt,
     )
     from ..cli.train import (
         build_arg_parser,
@@ -105,44 +116,6 @@ def _emit_holdout_console_message(message: str, *, rank_zero_only: bool = True) 
     print(f"[portfolio_attention.cli.holdout_test] {message}", flush=True)
 
 
-class GracefulInterruptController:
-    """Capture SIGINT/SIGTERM and expose interruption checks."""
-
-    def __init__(self) -> None:
-        self._interrupted = False
-        self._installed = False
-        self._previous_handlers: dict[int, Any] = {}
-
-    def install(self) -> None:
-        if self._installed:
-            return
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            self._previous_handlers[signum] = signal.getsignal(signum)
-            signal.signal(signum, self._handle_signal)
-        self._installed = True
-
-    def restore(self) -> None:
-        if not self._installed:
-            return
-        for signum, previous_handler in self._previous_handlers.items():
-            signal.signal(signum, previous_handler)
-        self._previous_handlers.clear()
-        self._installed = False
-
-    def raise_if_interrupted(self) -> None:
-        if self._interrupted:
-            raise KeyboardInterrupt("Interrupt requested.")
-
-    def _handle_signal(self, signum: int, frame: Any | None) -> None:
-        del frame
-        self._interrupted = True
-        try:
-            signal_name = signal.Signals(signum).name
-        except ValueError:
-            signal_name = str(signum)
-        raise KeyboardInterrupt(f"Received {signal_name}.")
-
-
 _INTERRUPT_CONTROLLER = GracefulInterruptController()
 _LEGACY_STOCK_FFN_MISSING_KEYS = frozenset(
     {
@@ -175,28 +148,6 @@ def _is_legacy_stock_ffn_only_missing_error(error: Exception) -> bool:
         return False
     missing_keys = _extract_missing_state_dict_keys_from_error(message)
     return missing_keys == _LEGACY_STOCK_FFN_MISSING_KEYS
-
-
-def _destroy_distributed_process_group_if_initialized() -> None:
-    if not torch.distributed.is_available():
-        return
-    if not torch.distributed.is_initialized():
-        return
-    try:
-        torch.distributed.destroy_process_group()
-    except Exception:
-        return
-
-
-def _exception_represents_interrupt(exc: BaseException) -> bool:
-    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-        return True
-    text = " ".join(str(exc).split()).lower()
-    if "keyboardinterrupt" in text:
-        return True
-    if "terminated with code 130" in text:
-        return True
-    return False
 
 
 class HoldoutPredictionModule(pl.LightningModule):
@@ -411,16 +362,7 @@ def _order_and_validate_prediction_payloads(
 
 
 def _sync_bool_flag_across_ranks(flag: bool) -> bool:
-    if not torch.distributed.is_available():
-        return bool(flag)
-    if not torch.distributed.is_initialized():
-        return bool(flag)
-    tensor_device = torch.device("cpu")
-    if torch.cuda.is_available():
-        tensor_device = torch.device("cuda", torch.cuda.current_device())
-    sync_tensor = torch.tensor(1 if bool(flag) else 0, device=tensor_device, dtype=torch.int32)
-    torch.distributed.all_reduce(sync_tensor, op=torch.distributed.ReduceOp.MAX)
-    return bool(int(sync_tensor.item()))
+    return sync_bool_flag_across_initialized_ranks(flag)
 
 
 def _build_prediction_dataloader(datamodule: LightningTrainDataModule) -> DataLoader:
@@ -642,6 +584,7 @@ def run_post_training_holdout(
         try:
             lightning_module = PortfolioLightningModule.load_from_checkpoint(
                 str(checkpoint_path),
+                weights_only=False,
                 **load_kwargs,
             )
         except Exception as exc:
@@ -653,6 +596,7 @@ def run_post_training_holdout(
                     lightning_module = PortfolioLightningModule.load_from_checkpoint(
                         str(checkpoint_path),
                         strict=False,
+                        weights_only=False,
                         **load_kwargs,
                     )
                     if hasattr(lightning_module, "model") and hasattr(

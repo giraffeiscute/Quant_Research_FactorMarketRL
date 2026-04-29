@@ -104,7 +104,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--output-root", type=Path, default=argparse.SUPPRESS)
-    parser.add_argument("--num-stocks", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--sample-num-stocks", type=int, default=argparse.SUPPRESS)
     parser.add_argument(
         "--stock-id-representation-type",
         choices=["learning", "gaussian"],
@@ -173,8 +173,8 @@ def resolve_data_config_from_args(
     resolved_data_config = validated_data_config(data_config or DataConfig())
     args_dict = vars(args)
     data_overrides: dict[str, Any] = {}
-    if "num_stocks" in args_dict:
-        data_overrides["num_stocks"] = args_dict["num_stocks"]
+    if "sample_num_stocks" in args_dict:
+        data_overrides["sample_num_stocks"] = args_dict["sample_num_stocks"]
     if data_overrides:
         resolved_data_config = replace(resolved_data_config, **data_overrides)
     return validated_data_config(resolved_data_config)

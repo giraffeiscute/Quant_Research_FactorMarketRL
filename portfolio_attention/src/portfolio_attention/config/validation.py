@@ -171,6 +171,12 @@ def validate_data_config(config: DataConfig) -> None:
             "DataConfig.train_batch_size must be positive, "
             f"received {config.train_batch_size}."
         )
+    config.sample_num_stocks = int(config.sample_num_stocks)
+    if config.sample_num_stocks <= 0:
+        raise ValueError(
+            "DataConfig.sample_num_stocks must be positive, "
+            f"received {config.sample_num_stocks}."
+        )
 
     split_seed_fields = {
         "scenario_split_seed": config.scenario_split_seed,

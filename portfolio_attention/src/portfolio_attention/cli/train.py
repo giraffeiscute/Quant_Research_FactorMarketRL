@@ -128,7 +128,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--state", type=str, default=argparse.SUPPRESS)
     parser.add_argument("--states", type=str, default=argparse.SUPPRESS)
-    parser.add_argument("--num-stocks", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--sample-num-stocks", type=int, default=argparse.SUPPRESS)
     parser.add_argument(
         "--stock-id-representation-type",
         choices=["learning", "gaussian"],
@@ -234,8 +234,8 @@ def resolve_runtime_configs_from_args(
             )
         data_overrides["state"] = normalized_state
         data_overrides["scenario_dir"] = default_scenario_dir(normalized_state)
-    if "num_stocks" in args_dict:
-        data_overrides["num_stocks"] = args_dict["num_stocks"]
+    if "sample_num_stocks" in args_dict:
+        data_overrides["sample_num_stocks"] = args_dict["sample_num_stocks"]
     if data_overrides:
         resolved_data_config = replace(resolved_data_config, **data_overrides)
 

@@ -33,4 +33,5 @@ from .standardization import (
     transform_stock_feature_context_array,
     transform_stock_features_for_context,
 )
+from .stock_sampling import coverage_cycle_stock_indices, validate_sample_num_stocks
 from .torch_datasets import RollingTrainWindowDataset, ScenarioSegmentDataset

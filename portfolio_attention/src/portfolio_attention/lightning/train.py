@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
-from typing import Any, Callable
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -14,7 +13,9 @@ if __package__ is None or __package__ == "":
         _configure_warning_routing,
         _destroy_distributed_process_group_if_initialized,
         _emit_lightning_console_message,
+        _exception_represents_interrupt,
         _is_global_rank_zero,
+        _trainer_was_interrupted,
     )
 else:
     from .run_safety import (
@@ -22,21 +23,45 @@ else:
         _configure_warning_routing,
         _destroy_distributed_process_group_if_initialized,
         _emit_lightning_console_message,
+        _exception_represents_interrupt,
         _is_global_rank_zero,
+        _trainer_was_interrupted,
     )
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
-from pytorch_lightning.loggers import CSVLogger
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 import torch
-from torch.utils.data import DataLoader, Dataset
-from torchmetrics import Metric
 
 if __package__ is None or __package__ == "":
-    from portfolio_attention.artifact import paths as artifact_paths
     from portfolio_attention.config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
-    from portfolio_attention.data.dataset import PortfolioPanelDataset
-    from portfolio_attention.evaluation.runtime import _collect_single_scenario_rolling_one_step_outputs
+    from portfolio_attention.evaluation.metrics import (
+        compute_average_turnover_from_weights as _compute_average_turnover_from_weights,
+        compute_selected_stock_count_from_weights as _compute_selected_stock_count_from_weights,
+    )
+    from portfolio_attention.evaluation.runtime import (
+        _collect_single_scenario_rolling_one_step_outputs,
+        _rebuild_evaluation_window_x_stock,
+        _slice_single_scenario_rolling_window_batch,
+    )
+    from portfolio_attention.lightning import module as _lightning_module
+    from portfolio_attention.lightning import post_training as _lightning_post_training
+    from portfolio_attention.lightning import validation as _lightning_validation
+    from portfolio_attention.lightning.callbacks import ConfigEpochCheckpointCallback
+    from portfolio_attention.lightning.datamodule import LightningTrainDataModule
+    from portfolio_attention.lightning.distributed import (
+        sync_bool_flag_across_ranks,
+        state_transition_barrier,
+    )
+    from portfolio_attention.lightning.logging import (
+        CSV_METRIC_DECIMAL_PLACES,
+        RoundedCSVLogger,
+        RoundedMetricsExperimentWriter,
+    )
+    from portfolio_attention.lightning.module import PortfolioLightningModule as _BasePortfolioLightningModule
+    from portfolio_attention.lightning.validation import (
+        ScenarioRollingValidationMetric,
+        compute_validation_window_objective_loss,
+    )
     from portfolio_attention.model.losses import build_loss
     from portfolio_attention.cli.train import (
         _parse_states_args,
@@ -46,13 +71,37 @@ if __package__ is None or __package__ == "":
         resolve_runtime_configs_from_args,
     )
     from portfolio_attention.training.engine import _run_loss_step, build_training_model
-    from portfolio_attention.training.monitoring import resolve_monitoring_holdout_backtest_epochs
     from portfolio_attention.common.utils import save_runtime_config_artifact, set_seed
 else:
-    from ..artifact import paths as artifact_paths
     from ..config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
-    from ..data.dataset import PortfolioPanelDataset
-    from ..evaluation.runtime import _collect_single_scenario_rolling_one_step_outputs
+    from ..evaluation.metrics import (
+        compute_average_turnover_from_weights as _compute_average_turnover_from_weights,
+        compute_selected_stock_count_from_weights as _compute_selected_stock_count_from_weights,
+    )
+    from ..evaluation.runtime import (
+        _collect_single_scenario_rolling_one_step_outputs,
+        _rebuild_evaluation_window_x_stock,
+        _slice_single_scenario_rolling_window_batch,
+    )
+    from . import module as _lightning_module
+    from . import post_training as _lightning_post_training
+    from . import validation as _lightning_validation
+    from .callbacks import ConfigEpochCheckpointCallback
+    from .datamodule import LightningTrainDataModule
+    from .distributed import (
+        sync_bool_flag_across_ranks,
+        state_transition_barrier,
+    )
+    from .logging import (
+        CSV_METRIC_DECIMAL_PLACES,
+        RoundedCSVLogger,
+        RoundedMetricsExperimentWriter,
+    )
+    from .module import PortfolioLightningModule as _BasePortfolioLightningModule
+    from .validation import (
+        ScenarioRollingValidationMetric,
+        compute_validation_window_objective_loss,
+    )
     from ..model.losses import build_loss
     from ..cli.train import (
         _parse_states_args,
@@ -62,603 +111,74 @@ else:
         resolve_runtime_configs_from_args,
     )
     from ..training.engine import _run_loss_step, build_training_model
-    from ..training.monitoring import resolve_monitoring_holdout_backtest_epochs
     from ..common.utils import save_runtime_config_artifact, set_seed
 
 
-class LightningTrainDataModule(pl.LightningDataModule):
-    """Thin DataModule wrapper around the existing scenario dataset stack."""
-
-    def __init__(
-        self,
-        *,
-        data_config: DataConfig,
-        num_workers: int = 0,
-        interrupt_checker: Callable[[], None] | None = None,
-    ) -> None:
-        super().__init__()
-        self.data_config = data_config
-        self.num_workers = int(num_workers)
-        self.interrupt_checker = interrupt_checker
-
-        self.dataset: PortfolioPanelDataset | None = None
-        self.train_dataset: Dataset | None = None
-        self.validation_dataset: Dataset | None = None
-        self.test_dataset: Dataset | None = None
-
-    def _raise_if_interrupted(self) -> None:
-        if self.interrupt_checker is None:
-            return
-        self.interrupt_checker()
-
-    def build_datasets(self) -> None:
-        self._raise_if_interrupted()
-        if self.dataset is not None:
-            return
-        dataset = PortfolioPanelDataset(
-            self.data_config,
-            interrupt_checker=self.interrupt_checker,
-        )
-        train_dataset, validation_dataset, test_dataset = dataset.build_train_validation_test_datasets()
-        self.dataset = dataset
-        self.train_dataset = train_dataset
-        self.validation_dataset = validation_dataset
-        self.test_dataset = test_dataset
-        self._raise_if_interrupted()
-
-    def validate_validation_divisibility(self, world_size: int) -> None:
-        self.build_datasets()
-        if self.validation_dataset is None:
-            raise RuntimeError("validation_dataset is unavailable before divisibility validation.")
-        resolved_world_size = int(world_size)
-        if resolved_world_size <= 0 or (len(self.validation_dataset) % resolved_world_size) != 0:
-            raise ValueError(
-                "validation dataset size must be divisible by world size to avoid duplicated validation scenarios under DistributedSampler"
-            )
-
-    def setup(self, stage: str | None = None) -> None:
-        if stage not in (None, "fit", "validate", "test"):
-            return
-        self.build_datasets()
-
-    def _build_dataloader(
-        self,
-        dataset: Dataset,
-        *,
-        batch_size: int,
-        shuffle: bool,
-    ) -> DataLoader:
-        return DataLoader(
-            dataset,
-            batch_size=int(batch_size),
-            shuffle=bool(shuffle),
-            num_workers=self.num_workers,
-            pin_memory=True,
-            persistent_workers=False,
-        )
-
-    def train_dataloader(self) -> DataLoader:
-        if self.train_dataset is None:
-            raise RuntimeError("train_dataset is unavailable before building the train DataLoader.")
-        return self._build_dataloader(
-            self.train_dataset,
-            batch_size=self.data_config.train_batch_size,
-            shuffle=True,
-        )
-
-    def val_dataloader(self) -> DataLoader:
-        if self.validation_dataset is None:
-            raise RuntimeError(
-                "validation_dataset is unavailable before building the validation DataLoader."
-            )
-        return self._build_dataloader(
-            self.validation_dataset,
-            batch_size=1,
-            shuffle=False,
-        )
-
-    def test_dataloader(self) -> DataLoader:
-        if self.test_dataset is None:
-            raise RuntimeError("test_dataset is unavailable before building the test DataLoader.")
-        return self._build_dataloader(
-            self.test_dataset,
-            batch_size=1,
-            shuffle=False,
-        )
-
-
-def _compute_selected_stock_count_from_weights(
-    stock_weights: torch.Tensor,
-    *,
-    threshold: float,
-    min_active_days: int,
-) -> int:
-    if stock_weights.ndim != 2:
-        raise ValueError("stock_weights must have shape [T, N].")
-    resolved_min_active_days = int(min_active_days)
-    if resolved_min_active_days <= 0:
-        raise ValueError(f"min_active_days must be positive, received {min_active_days}.")
-    if int(stock_weights.shape[0]) <= 0:
-        raise ValueError("stock_weights must include at least one scored day.")
-
-    threshold_tensor = torch.full_like(stock_weights, float(threshold))
-    above_threshold = (stock_weights > threshold_tensor) & (
-        ~torch.isclose(stock_weights, threshold_tensor, rtol=0.0, atol=1e-9)
+def _sync_legacy_validation_hooks() -> None:
+    _lightning_validation._rebuild_evaluation_window_x_stock = _rebuild_evaluation_window_x_stock
+    _lightning_validation._slice_single_scenario_rolling_window_batch = (
+        _slice_single_scenario_rolling_window_batch
     )
-    effective_min_active_days = min(resolved_min_active_days, int(stock_weights.shape[0]))
-    selected_stock_count = int((above_threshold.sum(dim=0) >= effective_min_active_days).sum().item())
-    return selected_stock_count
+    _lightning_validation._run_loss_step = _run_loss_step
 
 
-def _compute_average_turnover_from_weights(
-    stock_weights: torch.Tensor,
-    cash_weights: torch.Tensor,
-) -> float:
-    if stock_weights.ndim != 2:
-        raise ValueError("stock_weights must have shape [T, N].")
-    if cash_weights.ndim != 1:
-        raise ValueError("cash_weights must have shape [T].")
-    if int(stock_weights.shape[0]) != int(cash_weights.shape[0]):
-        raise ValueError("stock_weights and cash_weights must share the same time dimension.")
-    if int(stock_weights.shape[0]) < 2:
-        return 0.0
-
-    allocation_weights = torch.cat((stock_weights, cash_weights.unsqueeze(-1)), dim=1)
-    daily_turnover = 0.5 * torch.abs(allocation_weights[1:] - allocation_weights[:-1]).sum(dim=1)
-    return float(daily_turnover.mean().item())
+def _compute_validation_window_objective_loss(**kwargs):
+    _sync_legacy_validation_hooks()
+    return compute_validation_window_objective_loss(**kwargs)
 
 
-class ScenarioRollingValidationMetric(Metric):
-    """Aggregate scenario-level validation outputs across DDP workers."""
-
-    full_state_update = False
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.add_state("loss_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("final_return_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("scenario_count", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum")
-        self.add_state(
-            "rolling_window_count",
-            default=torch.tensor(0, dtype=torch.long),
-            dist_reduce_fx="sum",
-        )
-        self.add_state("selected_stock_count_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("average_turnover_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
-
-    def update(
-        self,
-        *,
-        loss_value: torch.Tensor | float,
-        scenario_final_return: torch.Tensor | float,
-        num_rolling_windows: torch.Tensor | int,
-        selected_stock_count: torch.Tensor | int | float,
-        average_turnover: torch.Tensor | float,
-        scenario_count: torch.Tensor | int = 1,
-    ) -> None:
-        self.loss_sum += torch.as_tensor(loss_value, device=self.loss_sum.device, dtype=self.loss_sum.dtype)
-        self.final_return_sum += torch.as_tensor(
-            scenario_final_return,
-            device=self.final_return_sum.device,
-            dtype=self.final_return_sum.dtype,
-        )
-        self.scenario_count += torch.as_tensor(
-            scenario_count,
-            device=self.scenario_count.device,
-            dtype=self.scenario_count.dtype,
-        )
-        self.rolling_window_count += torch.as_tensor(
-            num_rolling_windows,
-            device=self.rolling_window_count.device,
-            dtype=self.rolling_window_count.dtype,
-        )
-        self.selected_stock_count_sum += torch.as_tensor(
-            selected_stock_count,
-            device=self.selected_stock_count_sum.device,
-            dtype=self.selected_stock_count_sum.dtype,
-        )
-        self.average_turnover_sum += torch.as_tensor(
-            average_turnover,
-            device=self.average_turnover_sum.device,
-            dtype=self.average_turnover_sum.dtype,
-        )
-
-    def compute(self) -> dict[str, torch.Tensor]:
-        if int(self.scenario_count.item()) <= 0:
-            zero = self.loss_sum.new_zeros(())
-            zero_count = self.rolling_window_count.new_zeros(())
-            return {
-                "val_loss": zero,
-                "val_mean_final_return": zero,
-                "validation_num_rolling_windows_total": zero_count,
-                "validation_stocks_bought": zero,
-                "validation_average_turnover": zero,
-            }
-
-        scenario_count = self.scenario_count.to(dtype=self.loss_sum.dtype)
-        return {
-            "val_loss": self.loss_sum / scenario_count,
-            "val_mean_final_return": self.final_return_sum / scenario_count,
-            "validation_num_rolling_windows_total": self.rolling_window_count.clone(),
-            "validation_stocks_bought": self.selected_stock_count_sum / scenario_count,
-            "validation_average_turnover": self.average_turnover_sum / scenario_count,
-        }
+def _sync_legacy_module_hooks() -> None:
+    _sync_legacy_validation_hooks()
+    _lightning_module.build_training_model = build_training_model
+    _lightning_module._run_loss_step = _run_loss_step
+    _lightning_module._collect_single_scenario_rolling_one_step_outputs = (
+        _collect_single_scenario_rolling_one_step_outputs
+    )
+    _lightning_module.build_loss = build_loss
+    _lightning_module.compute_validation_window_objective_loss = _compute_validation_window_objective_loss
+    _lightning_module.compute_selected_stock_count_from_weights = _compute_selected_stock_count_from_weights
+    _lightning_module.compute_average_turnover_from_weights = _compute_average_turnover_from_weights
 
 
-class PortfolioLightningModule(pl.LightningModule):
-    """LightningModule that reuses the repo's model/loss/validation helpers."""
+class PortfolioLightningModule(_BasePortfolioLightningModule):
+    """Backward-compatible facade for the split LightningModule implementation."""
 
-    def __init__(
-        self,
-        *,
-        data_config: DataConfig,
-        model_config: ModelConfig,
-        train_config: TrainConfig,
-        dataset: PortfolioPanelDataset,
-        stock_count_weight_threshold: float,
-        stock_count_min_active_days: int,
-    ) -> None:
-        super().__init__()
-        self.data_config = data_config
-        self.model_config = model_config
-        self.train_config = train_config
-        self.dataset = dataset
-        self.stock_count_weight_threshold = float(stock_count_weight_threshold)
-        self.stock_count_min_active_days = int(stock_count_min_active_days)
+    def __init__(self, *args, **kwargs) -> None:
+        _sync_legacy_module_hooks()
+        super().__init__(*args, **kwargs)
 
-        self.model = build_training_model(
-            model_config=model_config,
-            dataset=dataset,
-            data_config=data_config,
-            device=torch.device("cpu"),
-        )
-        self.val_metric = ScenarioRollingValidationMetric()
+    def training_step(self, *args, **kwargs):
+        _sync_legacy_module_hooks()
+        return super().training_step(*args, **kwargs)
 
-    def forward(
-        self,
-        x_stock: torch.Tensor,
-        x_market: torch.Tensor,
-        stock_indices: torch.Tensor,
-        target_returns: torch.Tensor | None = None,
-    ) -> dict[str, Any]:
-        return self.model(
-            x_stock,
-            x_market,
-            stock_indices,
-            target_returns=target_returns,
-        )
-
-    def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
-        del batch_idx
-        loss, _, summary = _run_loss_step(
-            self.model,
-            batch,
-            self.train_config.loss_name,
-            turnover_penalty=self.train_config.turnover_penalty,
-            transaction_cost_rate=self.train_config.transaction_cost_rate,
-            turnover_penalty_norm=self.train_config.turnover_penalty_norm,
-        )
-        train_mean_final_return = summary["scenario_final_returns"].mean()
-        batch_size = int(summary["scenario_final_returns"].numel())
-
-        self._log_train_epoch_metric("train_loss", loss, prog_bar=True, batch_size=batch_size)
-        self._log_train_epoch_metric(
-            "train_mean_final_return",
-            train_mean_final_return,
-            prog_bar=False,
-            batch_size=batch_size,
-        )
-        return loss
-
-    def on_validation_epoch_start(self) -> None:
-        self.val_metric.reset()
-
-    def validation_step(self, batch: dict[str, Any], batch_idx: int) -> None:
-        del batch_idx
-        rolling_outputs = _collect_single_scenario_rolling_one_step_outputs(
-            model=self.model,
-            dataset=self.dataset,
-            raw_batch=batch,
-            device=self.device,
-            lookback_days=int(self.dataset.metadata.lookback_days),
-            evaluation_label="Lightning validation rolling evaluation",
-            collect_weights=True,
-        )
-        scored_returns = rolling_outputs["portfolio_returns"].unsqueeze(0)
-        loss = build_loss(self.train_config.loss_name, scored_returns)
-        scenario_final_return = (torch.prod(1.0 + scored_returns, dim=1) - 1.0).mean()
-        selected_stock_count = _compute_selected_stock_count_from_weights(
-            rolling_outputs["stock_weights"],
-            threshold=self.stock_count_weight_threshold,
-            min_active_days=self.stock_count_min_active_days,
-        )
-        average_turnover = _compute_average_turnover_from_weights(
-            rolling_outputs["stock_weights"],
-            rolling_outputs["cash_weights"],
-        )
-
-        self.val_metric.update(
-            loss_value=loss.detach(),
-            scenario_final_return=scenario_final_return.detach(),
-            num_rolling_windows=int(rolling_outputs["num_rolling_windows"]),
-            selected_stock_count=selected_stock_count,
-            average_turnover=average_turnover,
-        )
-
-    def on_validation_epoch_end(self) -> None:
-        metrics = self.val_metric.compute()
-        self._log_validation_epoch_metric("val_loss", metrics["val_loss"], prog_bar=True)
-        self._log_validation_epoch_metric(
-            "val_mean_final_return",
-            metrics["val_mean_final_return"],
-            prog_bar=True,
-        )
-        validation_num_rolling_windows_total = metrics["validation_num_rolling_windows_total"].to(
-            dtype=torch.float32
-        )
-        self._log_validation_epoch_metric(
-            "validation_num_rolling_windows_total",
-            validation_num_rolling_windows_total,
-            prog_bar=False,
-        )
-        self._log_validation_epoch_metric(
-            "validation_stocks_bought",
-            metrics["validation_stocks_bought"],
-            prog_bar=False,
-        )
-        self._log_validation_epoch_metric(
-            "validation_average_turnover",
-            metrics["validation_average_turnover"],
-            prog_bar=False,
-        )
-
-    def _log_train_epoch_metric(
-        self,
-        name: str,
-        value: torch.Tensor | float,
-        *,
-        prog_bar: bool,
-        batch_size: int,
-    ) -> None:
-        self.log(
-            name,
-            value,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=prog_bar,
-            logger=True,
-            sync_dist=True,
-            batch_size=int(batch_size),
-        )
-
-    def _log_validation_epoch_metric(
-        self,
-        name: str,
-        value: torch.Tensor | float,
-        *,
-        prog_bar: bool,
-    ) -> None:
-        self.log(
-            name,
-            value,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=prog_bar,
-            logger=True,
-            sync_dist=False,
-        )
-
-    def configure_optimizers(self) -> torch.optim.Optimizer:
-        return torch.optim.Adam(
-            self.model.parameters(),
-            lr=float(self.train_config.learning_rate),
-            weight_decay=float(self.train_config.weight_decay),
-        )
-
-
-class ConfigEpochCheckpointCallback(Callback):
-    """Persist Lightning checkpoints for config-selected 1-based epochs."""
-
-    def __init__(self, *, paths: PathsConfig, state: str, train_config: TrainConfig) -> None:
-        super().__init__()
-        self.paths = paths
-        self.state = state
-        self.train_config = train_config
-        self.latest_completed_epoch: int = 0
-
-    def on_validation_epoch_end(
-        self,
-        trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-    ) -> None:
-        del pl_module
-        if trainer.sanity_checking:
-            return
-        completed_epoch = int(trainer.current_epoch) + 1
-        self.latest_completed_epoch = max(self.latest_completed_epoch, completed_epoch)
-        configured_epochs = resolve_monitoring_holdout_backtest_epochs(
-            self.train_config,
-            max_epoch=completed_epoch,
-        )
-        if completed_epoch not in configured_epochs:
-            return
-
-        checkpoint_path = artifact_paths.lightning_epoch_checkpoint_path(
-            self.paths,
-            str(getattr(self.train_config, "loss_name", "")),
-            completed_epoch,
-            state=self.state,
-        )
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        # Trainer.save_checkpoint must run on all ranks for distributed strategies.
-        trainer.save_checkpoint(str(checkpoint_path))
-        if trainer.is_global_zero:
-            _emit_lightning_console_message(
-                f"Saved configured epoch checkpoint for post-training holdout: epoch={completed_epoch} path={checkpoint_path}"
-            )
-
-
-def _trainer_was_interrupted(trainer: pl.Trainer) -> bool:
-    if bool(getattr(trainer, "interrupted", False)):
-        return True
-    state = getattr(trainer, "state", None)
-    status = getattr(state, "status", None)
-    if status is None:
-        return False
-    status_name = getattr(status, "name", None)
-    if isinstance(status_name, str):
-        return status_name.upper() == "INTERRUPTED"
-    return str(status).upper().endswith("INTERRUPTED")
-
-
-def _exception_represents_interrupt(exc: BaseException) -> bool:
-    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-        return True
-    text = " ".join(str(exc).split()).lower()
-    if "keyboardinterrupt" in text:
-        return True
-    if "terminated with code 130" in text:
-        return True
-    return False
-
-
-def _run_post_training_holdout_after_fit(
-    *,
-    trainer: pl.Trainer,
-    checkpoint_callback: ConfigEpochCheckpointCallback,
-    paths: PathsConfig,
-    data_config: DataConfig,
-    model_config: ModelConfig,
-    train_config: TrainConfig,
-    datamodule: LightningTrainDataModule,
-    holdout_runner: Callable[..., list[tuple[int, str]]] | None = None,
-) -> None:
-    completed_epochs = int(checkpoint_callback.latest_completed_epoch)
-    if completed_epochs <= 0:
-        if trainer.is_global_zero:
-            _emit_lightning_console_message("Skipping post-training holdout: no completed epochs were detected.")
-        return
-
-    resolved_world_size = int(getattr(trainer, "world_size", 1) or 1)
-    # When torch.distributed is initialized (e.g., DDP fit), the holdout path performs
-    # collective ops (DistributedSampler/all_gather_object), so every rank must participate.
-    should_run_on_this_rank = bool(getattr(trainer, "is_global_zero", False)) or resolved_world_size > 1
-    if not should_run_on_this_rank:
-        return
-
-    if holdout_runner is None:
-        if __package__ is None or __package__ == "":
-            from portfolio_attention.lightning.holdout_test import run_post_training_holdout as holdout_runner_impl
-        else:
-            from .holdout_test import run_post_training_holdout as holdout_runner_impl
-    else:
-        holdout_runner_impl = holdout_runner
-
-    if trainer.is_global_zero:
-        _emit_lightning_console_message(
-            f"Starting post-training holdout evaluation up to completed_epoch={completed_epochs}."
-        )
-    holdout_kwargs = {
-        "paths": paths,
-        "data_config": data_config,
-        "model_config": model_config,
-        "train_config": train_config,
-        "max_epoch": completed_epochs,
-        "devices": resolved_world_size,
-        "datamodule": datamodule,
-        "interrupt_checker": _INTERRUPT_CONTROLLER.raise_if_interrupted,
-    }
-    try:
-        holdout_runner_impl(**holdout_kwargs)
-    except TypeError as exc:
-        if "devices" not in str(exc):
-            raise
-        holdout_kwargs.pop("devices", None)
-        holdout_runner_impl(**holdout_kwargs)
+    def validation_step(self, *args, **kwargs):
+        _sync_legacy_module_hooks()
+        return super().validation_step(*args, **kwargs)
 
 
 def _state_transition_barrier(*, trainer: pl.Trainer, barrier_name: str) -> None:
-    resolved_world_size = int(getattr(trainer, "world_size", 1) or 1)
-    if resolved_world_size <= 1:
-        return
-
-    strategy = getattr(trainer, "strategy", None)
-    strategy_barrier = getattr(strategy, "barrier", None)
-    if callable(strategy_barrier):
-        try:
-            strategy_barrier(barrier_name)
-        except TypeError:
-            strategy_barrier()
-        return
-
-    if not torch.distributed.is_available():
-        return
-    if not torch.distributed.is_initialized():
-        return
-    torch.distributed.barrier()
+    state_transition_barrier(trainer=trainer, barrier_name=barrier_name)
 
 
 def _sync_bool_flag_across_ranks(*, trainer: pl.Trainer, flag: bool) -> bool:
-    resolved_world_size = int(getattr(trainer, "world_size", 1) or 1)
-    if resolved_world_size <= 1:
-        return bool(flag)
-
-    if not torch.distributed.is_available():
-        return bool(flag)
-    if not torch.distributed.is_initialized():
-        return bool(flag)
-
-    tensor_device = torch.device("cpu")
-    if torch.cuda.is_available():
-        tensor_device = torch.device("cuda", torch.cuda.current_device())
-    sync_tensor = torch.tensor(1 if bool(flag) else 0, device=tensor_device, dtype=torch.int32)
-    torch.distributed.all_reduce(sync_tensor, op=torch.distributed.ReduceOp.MAX)
-    return bool(int(sync_tensor.item()))
+    return sync_bool_flag_across_ranks(trainer=trainer, flag=flag)
 
 
-def _run_post_training_holdout_after_fit_with_barriers(
-    *,
-    trainer: pl.Trainer,
-    checkpoint_callback: ConfigEpochCheckpointCallback,
-    paths: PathsConfig,
-    data_config: DataConfig,
-    model_config: ModelConfig,
-    train_config: TrainConfig,
-    datamodule: LightningTrainDataModule,
-    holdout_runner: Callable[..., list[tuple[int, str]]] | None = None,
-) -> None:
-    _state_transition_barrier(
-        trainer=trainer,
-        barrier_name="before_post_training_holdout",
-    )
-    holdout_exc: BaseException | None = None
-    try:
-        _run_post_training_holdout_after_fit(
-            trainer=trainer,
-            checkpoint_callback=checkpoint_callback,
-            paths=paths,
-            data_config=data_config,
-            model_config=model_config,
-            train_config=train_config,
-            datamodule=datamodule,
-            holdout_runner=holdout_runner,
-        )
-    except BaseException as exc:  # noqa: BLE001
-        holdout_exc = exc
-    finally:
-        _state_transition_barrier(
-            trainer=trainer,
-            barrier_name="after_post_training_holdout",
-        )
+def _sync_legacy_post_training_hooks() -> None:
+    _lightning_post_training._state_transition_barrier = _state_transition_barrier
+    _lightning_post_training._sync_bool_flag_across_ranks = globals()["_sync_bool_flag_across_ranks"]
+    _lightning_post_training._emit_lightning_console_message = _emit_lightning_console_message
+    _lightning_post_training._INTERRUPT_CONTROLLER = _INTERRUPT_CONTROLLER
 
-    holdout_failed = _sync_bool_flag_across_ranks(
-        trainer=trainer,
-        flag=(holdout_exc is not None),
-    )
-    if holdout_failed:
-        if holdout_exc is not None:
-            raise holdout_exc
-        raise RuntimeError("Post-training holdout failed on another DDP rank.")
+
+def _run_post_training_holdout_after_fit(**kwargs) -> None:
+    _sync_legacy_post_training_hooks()
+    _lightning_post_training.run_post_training_holdout_after_fit(**kwargs)
+
+
+def _run_post_training_holdout_after_fit_with_barriers(**kwargs) -> None:
+    _sync_legacy_post_training_hooks()
+    _lightning_post_training.run_post_training_holdout_after_fit_with_barriers(**kwargs)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -830,7 +350,7 @@ def _build_single_state_training_stack(
         state=data_config.state,
         train_config=train_config,
     )
-    csv_logger = CSVLogger(
+    csv_logger = RoundedCSVLogger(
         save_dir=str(paths.outputs_dir),
         name="lightning_logs",
         version=f"{data_config.state}_{train_config.loss_name}",

@@ -20,7 +20,7 @@ from ..evaluation.runtime import (
     ROLLING_ONE_STEP_STRIDE_DAYS,
     _collect_single_scenario_rolling_one_step_outputs,
 )
-from ..model.losses import build_loss, build_portfolio_objective_loss
+from ..model.losses import build_loss, build_portfolio_objective_loss, compute_turnover_penalty
 from ..model import PortfolioAttentionModel
 from .resume import advance_train_loader_generator, load_resume_training_state
 from .status import TrainingStatusReporter, build_dataset_progress_callback
@@ -219,11 +219,21 @@ def _run_loss_step(
         turnover_penalty_norm=turnover_penalty_norm,
     )
     net_scored_returns = scored_returns - float(transaction_cost_rate) * scored_turnover
+    if float(turnover_penalty) > 0.0:
+        weight_loss = float(turnover_penalty) * compute_turnover_penalty(
+            scored_turnover,
+            norm=turnover_penalty_norm,
+            portfolio_returns=net_scored_returns,
+            allocation_change_l2=scored_allocation_change_l2,
+        )
+    else:
+        weight_loss = scored_returns.new_zeros(())
     scenario_final_returns = torch.prod(1.0 + net_scored_returns, dim=1) - 1.0
     summary = {
         "scenario_final_returns": scenario_final_returns,
         "scenario_mean_step_returns": net_scored_returns.mean(dim=1),
         "scenario_gross_final_returns": torch.prod(1.0 + scored_returns, dim=1) - 1.0,
+        "weight_loss": weight_loss,
     }
     return loss, net_scored_returns, summary
 

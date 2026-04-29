@@ -78,6 +78,12 @@ def _build_data_config_from_checkpoint(
     checkpoint_data_config = _resolve_checkpoint_metadata_dict(checkpoint, "data_config")
     if not isinstance(checkpoint_data_config, dict):
         return fallback_data_config
+    if "num_stocks" in checkpoint_data_config:
+        raise ValueError(
+            "Checkpoint data_config contains legacy key 'num_stocks'. "
+            "Use DataConfig.sample_num_stocks for training sampling; full stock universe size "
+            "is inferred from scenario data and cannot be manually specified."
+        )
     filtered_config_dict = {
         key: value
         for key, value in checkpoint_data_config.items()
@@ -104,10 +110,14 @@ def _validate_requested_runtime_configs_against_checkpoint(
     )
     checkpoint_model_config = _build_model_config_from_checkpoint(checkpoint)
 
-    if "num_stocks" in args_dict and checkpoint_data_config.num_stocks != requested_data_config.num_stocks:
+    if (
+        "sample_num_stocks" in args_dict
+        and checkpoint_data_config.sample_num_stocks != requested_data_config.sample_num_stocks
+    ):
         raise ValueError(
-            "Requested num_stocks does not match the checkpoint data configuration. "
-            f"checkpoint={checkpoint_data_config.num_stocks} requested={requested_data_config.num_stocks}"
+            "Requested sample_num_stocks does not match the checkpoint data configuration. "
+            f"checkpoint={checkpoint_data_config.sample_num_stocks} "
+            f"requested={requested_data_config.sample_num_stocks}"
         )
     if (
         "stock_id_representation_type" in args_dict
