@@ -74,12 +74,19 @@ class PortfolioLightningModule(pl.LightningModule):
         )
         train_mean_final_return = summary["scenario_final_returns"].mean()
         train_weight_loss = summary.get("weight_loss", loss.new_zeros(()))
+        train_ot = summary.get("mean_turnover", loss.new_zeros(()))
         batch_size = int(summary["scenario_final_returns"].numel())
 
         self._log_train_epoch_metric("train_loss", loss, prog_bar=True, batch_size=batch_size)
         self._log_train_epoch_metric(
             "train_weight_loss",
             train_weight_loss,
+            prog_bar=False,
+            batch_size=batch_size,
+        )
+        self._log_train_epoch_metric(
+            "train_OT",
+            train_ot,
             prog_bar=False,
             batch_size=batch_size,
         )

@@ -51,12 +51,18 @@ def _coerce_turnover(turnover: torch.Tensor | None, *, reference: torch.Tensor) 
     return turnover
 
 
-def _lagged_positive_cumulative_return_weight(portfolio_returns: torch.Tensor) -> torch.Tensor:
+def _lagged_standardized_positive_cumulative_return_weight(
+    portfolio_returns: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
     cumulative_returns = torch.cumprod(1 + portfolio_returns, dim=1) - 1
     lagged_cumulative_returns = torch.zeros_like(cumulative_returns)
     if cumulative_returns.shape[1] > 1:
         lagged_cumulative_returns[:, 1:] = cumulative_returns[:, :-1]
-    return torch.relu(lagged_cumulative_returns).detach()
+    if portfolio_returns.shape[1] < 2:
+        return torch.zeros_like(lagged_cumulative_returns)
+    return_std = portfolio_returns.std(dim=1, unbiased=True).unsqueeze(1).clamp_min(eps)
+    return torch.relu(lagged_cumulative_returns / return_std).detach()
 
 
 def compute_turnover_penalty(
@@ -89,7 +95,7 @@ def compute_turnover_penalty(
             "portfolio_returns must match turnover shape when computing weighted turnover penalty. "
             f"Received portfolio_returns={tuple(scored_returns.shape)} turnover={tuple(scored_turnover.shape)}."
         )
-    weights = _lagged_positive_cumulative_return_weight(scored_returns)
+    weights = _lagged_standardized_positive_cumulative_return_weight(scored_returns)
     return (weights * regularizer).mean()
 
 

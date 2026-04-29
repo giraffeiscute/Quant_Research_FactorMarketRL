@@ -134,7 +134,7 @@ class ModelConfig:
     time_positional_encoding_type: Literal["none", "sinusoidal"] = "sinusoidal"
     allocation_smoothing_alpha: float = 0.9
     initial_allocation_mode: Literal["equal_weight", "random_dirichlet"] = "random_dirichlet"
-    initial_random_concentration: float = 1.0
+    initial_random_concentration: float = 5
     detach_prev_weight: bool = False
     use_prev_weight_feature: bool = True
 
@@ -147,17 +147,17 @@ class TrainConfig:
     """Training settings for scenario-mode optimization."""
 
     seed: int = 42
-    learning_rate: float = 2e-4
+    learning_rate: float = 3e-4
     num_epochs: int = 30
     weight_decay: float = 3e-4
     grad_clip_norm: float = 1.0
     early_stopping_patience: int = 7
     select_best_from_last_x_epochs: int = 1
-    holdout_backtest_interval_epochs: int = 2
+    holdout_backtest_interval_epochs: int = 4
     enable_fixed_epoch_holdout_backtests: bool = False
-    turnover_penalty: float = 2000
-    turnover_penalty_norm: Literal["l1", "l2"] = "l2"
-    transaction_cost_rate: float = 0.0
+    turnover_penalty: float = 0.5
+    turnover_penalty_norm: Literal["l1", "l2"] = "l1"
+    transaction_cost_rate: float = 0.001
     loss_name: Literal["", "return", "sharpe", "dsr", "sortino", "mdd", "cvar"] = ""
     device: str = "auto"
     resume_from: Path | None = None

@@ -40,6 +40,26 @@ class RoundedMetricsExperimentWriter(ExperimentWriter):
         metrics["step"] = step
         self.metrics.append(metrics)
 
+    def _record_new_keys(self) -> set[str]:
+        """Record new keys and keep selected metrics in a stable relative order."""
+        current_keys = set().union(*self.metrics)
+        new_keys = current_keys - set(self.metrics_keys)
+        self.metrics_keys.extend(new_keys)
+        self.metrics_keys.sort()
+        self._move_metric_key_after(anchor_key="train_loss", target_key="train_weight_loss")
+        self._move_metric_key_after(anchor_key="train_weight_loss", target_key="train_OT")
+        return new_keys
+
+    def _move_metric_key_after(self, *, anchor_key: str, target_key: str) -> None:
+        if anchor_key not in self.metrics_keys or target_key not in self.metrics_keys:
+            return
+        target_index = self.metrics_keys.index(target_key)
+        anchor_index = self.metrics_keys.index(anchor_key)
+        del self.metrics_keys[target_index]
+        if target_index < anchor_index:
+            anchor_index -= 1
+        self.metrics_keys.insert(anchor_index + 1, target_key)
+
 
 class RoundedCSVLogger(CSVLogger):
     """CSVLogger that writes floating-point metric values rounded to 8 decimal places."""

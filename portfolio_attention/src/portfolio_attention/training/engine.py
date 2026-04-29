@@ -234,6 +234,7 @@ def _run_loss_step(
         "scenario_mean_step_returns": net_scored_returns.mean(dim=1),
         "scenario_gross_final_returns": torch.prod(1.0 + scored_returns, dim=1) - 1.0,
         "weight_loss": weight_loss,
+        "mean_turnover": scored_turnover.mean(),
     }
     return loss, net_scored_returns, summary
 

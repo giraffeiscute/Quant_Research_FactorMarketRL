@@ -333,15 +333,18 @@ def _build_single_state_training_stack(
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=str(paths.checkpoints_dir),
-        filename=f"{data_config.state}_{train_config.loss_name}" + "-epoch{epoch:03d}-val{val_loss:.8f}",
-        monitor="val_loss",
+        filename=(
+            f"{data_config.state}_{train_config.loss_name}"
+            + "-epoch{epoch:03d}-val_window{val_loss_window:.8f}"
+        ),
+        monitor="val_loss_window",
         mode="min",
         save_top_k=1,
         save_last=True,
         auto_insert_metric_name=False,
     )
     early_stopping_callback = EarlyStopping(
-        monitor="val_loss",
+        monitor="val_loss_window",
         mode="min",
         patience=int(train_config.early_stopping_patience),
     )
