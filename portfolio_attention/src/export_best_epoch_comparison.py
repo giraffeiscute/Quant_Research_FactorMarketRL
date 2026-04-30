@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 from numbers import Integral, Real
 from pathlib import Path
 import sys
@@ -30,6 +31,8 @@ LABEL_3 = "l2"
 LABEL_4 = "l2 sample1000"
 COMPARISON_CSV_NAME = "best_epoch_state_loss_comparison.csv"
 SUMMARY_CSV_NAME = "best_epoch_state_summary.csv"
+NET_FEE_RATE = 0.001
+NET_VERSION_THRESHOLD = 22
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -125,6 +128,54 @@ def _require_distinct_labels(labels: list[str]) -> None:
         raise ValueError(
             "All labels must be distinct so the exported columns remain unambiguous."
         )
+
+
+def _parse_result_version(result_dir: Path) -> int | None:
+    match = re.search(r"\bv(\d+)\b", result_dir.name, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _build_net_metric_flags(
+    labels: list[str],
+    result_dirs: list[Path],
+) -> tuple[dict[str, bool], list[dict[str, str | int | None]]]:
+    use_net_metrics: dict[str, bool] = {}
+    warnings: list[dict[str, str | int | None]] = []
+    for label, result_dir in zip(labels, result_dirs):
+        version = _parse_result_version(result_dir)
+        if version is None:
+            use_net_metrics[label] = False
+            warnings.append(
+                {
+                    "label": label,
+                    "result_dir": str(result_dir),
+                    "reason": "unparseable_version_token",
+                    "expected_pattern": "v<number>",
+                    "use_net_metrics": False,
+                }
+            )
+            continue
+        use_net_metrics[label] = version <= NET_VERSION_THRESHOLD
+    return use_net_metrics, warnings
+
+
+def _to_net_return_and_sr(
+    gross_return: float | None,
+    gross_sr: float | None,
+    turnover: float | None,
+) -> tuple[float | None, float | None]:
+    if gross_return is None or gross_sr is None:
+        return gross_return, gross_sr
+    if turnover is None:
+        return gross_return, gross_sr
+    cost = NET_FEE_RATE * turnover * 100.0
+    net_return = gross_return - cost
+    if gross_return == 0:
+        return net_return, None
+    net_sr = gross_sr * (net_return / gross_return)
+    return net_return, net_sr
 
 
 def _load_manifest(manifest_path: Path) -> dict[str, Any]:
@@ -386,6 +437,7 @@ def _average_loss_rows(
 
 def _build_comparison_rows(
     best_by_label: list[tuple[str, dict[str, dict[str, Any]]]],
+    use_net_metrics: dict[str, bool],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
@@ -410,8 +462,13 @@ def _build_comparison_rows(
                     loss_rows_by_label[label],
                     context=f"{state}/{loss_name}/{label}",
                 )
-                average_row[f"{label}_return"] = avg_return
-                average_row[f"{label}_sr"] = avg_sr
+                if use_net_metrics.get(label, False):
+                    net_return, net_sr = _to_net_return_and_sr(avg_return, avg_sr, avg_turnover)
+                    average_row[f"{label}_return"] = net_return
+                    average_row[f"{label}_sr"] = net_sr
+                else:
+                    average_row[f"{label}_return"] = avg_return
+                    average_row[f"{label}_sr"] = avg_sr
                 average_row[f"{label}_turnover"] = avg_turnover
             rows.append(average_row)
 
@@ -432,17 +489,29 @@ def _build_comparison_rows(
                 for label, best_payload in state_payloads:
                     row = loss_rows_by_label[label].get(scenario_id)
                     scenario_row[f"{label}_best_epoch"] = best_payload["epoch"]
-                    scenario_row[f"{label}_return"] = (
+                    gross_return = (
                         float(row["portfolio_return"]) if row is not None else None
                     )
-                    scenario_row[f"{label}_sr"] = (
+                    gross_sr = (
                         float(row["portfolio_sr"]) if row is not None else None
                     )
-                    scenario_row[f"{label}_turnover"] = (
+                    scenario_turnover = (
                         float(row["turnover_rate"])
                         if row is not None and row.get("turnover_rate") is not None
                         else None
                     )
+                    if use_net_metrics.get(label, False):
+                        net_return, net_sr = _to_net_return_and_sr(
+                            gross_return,
+                            gross_sr,
+                            scenario_turnover,
+                        )
+                        scenario_row[f"{label}_return"] = net_return
+                        scenario_row[f"{label}_sr"] = net_sr
+                    else:
+                        scenario_row[f"{label}_return"] = gross_return
+                        scenario_row[f"{label}_sr"] = gross_sr
+                    scenario_row[f"{label}_turnover"] = scenario_turnover
                 rows.append(scenario_row)
 
     return rows
@@ -450,6 +519,7 @@ def _build_comparison_rows(
 
 def _build_summary_rows(
     best_by_label: list[tuple[str, dict[str, dict[str, Any]]]],
+    use_net_metrics: dict[str, bool],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for state in STATE_NAMES:
@@ -472,9 +542,25 @@ def _build_summary_rows(
                 mean_stocks_by_label[label] = avg_stocks_bought
                 mean_turnover_by_label[label] = avg_turnover
             for label, _ in state_payloads:
-                row[f"{label}_{loss_name}_mean_return"] = mean_return_by_label[label]
+                if use_net_metrics.get(label, False):
+                    net_return, _ = _to_net_return_and_sr(
+                        mean_return_by_label[label],
+                        mean_sr_by_label[label],
+                        mean_turnover_by_label[label],
+                    )
+                    row[f"{label}_{loss_name}_mean_return"] = net_return
+                else:
+                    row[f"{label}_{loss_name}_mean_return"] = mean_return_by_label[label]
             for label, _ in state_payloads:
-                row[f"{label}_{loss_name}_mean_sr"] = mean_sr_by_label[label]
+                if use_net_metrics.get(label, False):
+                    _, net_sr = _to_net_return_and_sr(
+                        mean_return_by_label[label],
+                        mean_sr_by_label[label],
+                        mean_turnover_by_label[label],
+                    )
+                    row[f"{label}_{loss_name}_mean_sr"] = net_sr
+                else:
+                    row[f"{label}_{loss_name}_mean_sr"] = mean_sr_by_label[label]
             for label, _ in state_payloads:
                 row[f"{label}_{loss_name}_mean_stocks"] = mean_stocks_by_label[label]
             for label, _ in state_payloads:
@@ -521,6 +607,7 @@ def main() -> None:
         _resolve_display_label(args.label_4, result_dirs[3], "Label 4"),
     ]
     _require_distinct_labels(labels)
+    use_net_metrics, version_warnings = _build_net_metric_flags(labels, result_dirs)
 
     best_by_label = [
         (
@@ -532,9 +619,11 @@ def main() -> None:
 
     comparison_rows = _build_comparison_rows(
         best_by_label,
+        use_net_metrics,
     )
     summary_rows = _build_summary_rows(
         best_by_label,
+        use_net_metrics,
     )
 
     comparison_path = output_dir / COMPARISON_CSV_NAME
@@ -575,6 +664,8 @@ def main() -> None:
     status_payload = {
         "comparison_csv": str(comparison_path),
         "summary_csv": str(summary_path),
+        "use_net_metrics_by_label": use_net_metrics,
+        "version_warnings": version_warnings,
         "states": {
             state: {
                 **{

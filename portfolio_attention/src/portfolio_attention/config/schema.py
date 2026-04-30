@@ -135,6 +135,8 @@ class ModelConfig:
     allocation_smoothing_alpha: float = 0.9
     initial_allocation_mode: Literal["equal_weight", "random_dirichlet"] = "random_dirichlet"
     initial_random_concentration: float = 5
+    allocation_distribution_type: Literal["softmax", "dirichlet"] = "softmax"
+    dirichlet_alpha_offset: float = 0.1
     detach_prev_weight: bool = False
     use_prev_weight_feature: bool = True
 

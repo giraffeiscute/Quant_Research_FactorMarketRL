@@ -1,5 +1,6 @@
 """Model domain facade."""
 
+from .allocation_distribution import AllocationDistribution, AllocationDistributionResult
 from .allocation_path import AllocationResult, AllocationSmoother
 from .cross_sectional import (
     AttentionCrossSectionalScorer,
@@ -12,6 +13,8 @@ from .temp_encoders import MarketTemporalEncoder, StockTemporalEncoder
 
 __all__ = [
     "AllocationResult",
+    "AllocationDistribution",
+    "AllocationDistributionResult",
     "AllocationSmoother",
     "AttentionCrossSectionalScorer",
     "AttentionPortfolioHead",

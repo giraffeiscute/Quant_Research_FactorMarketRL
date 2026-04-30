@@ -48,6 +48,10 @@ def normalize_model_config_dict(config_dict: dict[str, Any]) -> dict[str, Any]:
         normalized["initial_allocation_mode"] = "equal_weight"
     if "initial_random_concentration" not in normalized:
         normalized["initial_random_concentration"] = 1.0
+    if "allocation_distribution_type" not in normalized:
+        normalized["allocation_distribution_type"] = "softmax"
+    if "dirichlet_alpha_offset" not in normalized:
+        normalized["dirichlet_alpha_offset"] = 0.1
     if "detach_prev_weight" not in normalized:
         normalized["detach_prev_weight"] = False
     if "use_prev_weight_feature" not in normalized:
@@ -299,6 +303,22 @@ def validate_model_config(config: ModelConfig) -> None:
         raise ValueError(
             "ModelConfig.initial_random_concentration must be > 0.0, "
             f"received {config.initial_random_concentration}."
+        )
+
+    config.allocation_distribution_type = str(config.allocation_distribution_type).strip().lower()
+    valid_allocation_distribution_types = {"softmax", "dirichlet"}
+    if config.allocation_distribution_type not in valid_allocation_distribution_types:
+        raise ValueError(
+            "ModelConfig.allocation_distribution_type must be one of "
+            f"{sorted(valid_allocation_distribution_types)}, "
+            f"received {config.allocation_distribution_type!r}."
+        )
+
+    config.dirichlet_alpha_offset = float(config.dirichlet_alpha_offset)
+    if config.dirichlet_alpha_offset <= 0.0:
+        raise ValueError(
+            "ModelConfig.dirichlet_alpha_offset must be > 0.0, "
+            f"received {config.dirichlet_alpha_offset}."
         )
 
     if not isinstance(config.detach_prev_weight, bool):

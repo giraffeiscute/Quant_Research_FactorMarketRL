@@ -19,6 +19,8 @@ class CrossSectionalScoreResult:
     debug_info: dict[str, Any]
     raw_allocation: torch.Tensor | None = None
     precomputed_smoothing: tuple[torch.Tensor, ...] | None = None
+    allocation_distribution_debug_info: dict[str, Any] | None = None
+    allocation_alpha: torch.Tensor | None = None
 
 
 class MLPCrossSectionalScorer(nn.Module):
@@ -33,6 +35,8 @@ class MLPCrossSectionalScorer(nn.Module):
         cross_sectional_dim: int,
         dropout: float,
         uses_post_temporal_identity: bool,
+        allocation_distribution_type: str = "softmax",
+        dirichlet_alpha_offset: float = 0.1,
     ) -> None:
         super().__init__()
         self.uses_post_temporal_identity = uses_post_temporal_identity
@@ -51,6 +55,8 @@ class MLPCrossSectionalScorer(nn.Module):
             cross_sectional_dim=cross_sectional_dim,
             cash_hidden_dim=cash_hidden_dim,
             dropout=dropout,
+            allocation_distribution_type=allocation_distribution_type,
+            dirichlet_alpha_offset=dirichlet_alpha_offset,
         )
 
     @property
@@ -111,6 +117,8 @@ class MLPCrossSectionalScorer(nn.Module):
             },
             raw_allocation=head_result.raw_allocation,
             precomputed_smoothing=head_result.precomputed_smoothing,
+            allocation_distribution_debug_info=head_result.allocation_distribution_debug_info,
+            allocation_alpha=head_result.allocation_alpha,
         )
 
 
@@ -129,6 +137,8 @@ class AttentionCrossSectionalScorer(nn.Module):
         allocation_smoothing_alpha: float,
         detach_prev_weight: bool,
         use_prev_weight_feature: bool,
+        allocation_distribution_type: str = "softmax",
+        dirichlet_alpha_offset: float = 0.1,
     ) -> None:
         super().__init__()
         self.uses_post_temporal_identity = uses_post_temporal_identity
@@ -168,6 +178,8 @@ class AttentionCrossSectionalScorer(nn.Module):
             allocation_smoothing_alpha=allocation_smoothing_alpha,
             detach_prev_weight=detach_prev_weight,
             use_prev_weight_feature=use_prev_weight_feature,
+            allocation_distribution_type=allocation_distribution_type,
+            dirichlet_alpha_offset=dirichlet_alpha_offset,
         )
 
     @property
@@ -268,4 +280,6 @@ class AttentionCrossSectionalScorer(nn.Module):
             debug_info={**debug_info, **head_result.debug_info},
             raw_allocation=head_result.raw_allocation,
             precomputed_smoothing=head_result.precomputed_smoothing,
+            allocation_distribution_debug_info=head_result.allocation_distribution_debug_info,
+            allocation_alpha=head_result.allocation_alpha,
         )
