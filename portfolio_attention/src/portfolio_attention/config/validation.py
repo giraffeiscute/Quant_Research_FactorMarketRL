@@ -373,3 +373,10 @@ def validate_evaluation_config(config: EvaluationConfig) -> None:
             "EvaluationConfig.stock_count_min_active_days must be positive, "
             f"received {config.stock_count_min_active_days}."
         )
+
+    config.evaluation_transaction_cost_rate = float(config.evaluation_transaction_cost_rate)
+    if config.evaluation_transaction_cost_rate < 0.0:
+        raise ValueError(
+            "EvaluationConfig.evaluation_transaction_cost_rate must be non-negative, "
+            f"received {config.evaluation_transaction_cost_rate}."
+        )

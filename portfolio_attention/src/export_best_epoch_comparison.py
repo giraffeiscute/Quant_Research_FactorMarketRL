@@ -18,16 +18,16 @@ if str(SRC_DIR) not in sys.path:
 STATE_NAMES = ("bear", "neutral", "bull")
 LOSS_NAMES = ("sharpe",)
 # Edit these when switching the comparison targets.
-RESULT_DIR_1 = PROJECT_DIR / "outputs" / "result v16 temp stock attention add"
-RESULT_DIR_2 = PROJECT_DIR / "outputs" / "result v18 add dropout 0.1"
-RESULT_DIR_3 = PROJECT_DIR / "outputs" / "result v19 lamda0.2 l1 a=0.7"
-RESULT_DIR_4 = PROJECT_DIR / "outputs" / "result v21 add return lamda 100 l2 a=0.9"
+RESULT_DIR_1 = PROJECT_DIR / "outputs" / "result v18 add dropout 0.1"
+RESULT_DIR_2 = PROJECT_DIR / "outputs" / "result v19 lamda0.2 l1 a=0.7"
+RESULT_DIR_3 = PROJECT_DIR / "outputs" / "result v20 lamda 0.05 l2 a=1"
+RESULT_DIR_4 = PROJECT_DIR / "outputs" / "result v22 lamda 2500 sample1000 l2"
 OUTPUT_DIR = PROJECT_DIR / "outputs"
 # Leave blank to auto-generate a readable label from the directory name.
-LABEL_1 = "add"
-LABEL_2 = "drop 0.1"
-LABEL_3 = "weight add"
-LABEL_4 = "weight loss*Ct-1"
+LABEL_1 = "no weight"
+LABEL_2 = "l1"
+LABEL_3 = "l2"
+LABEL_4 = "l2 sample1000"
 COMPARISON_CSV_NAME = "best_epoch_state_loss_comparison.csv"
 SUMMARY_CSV_NAME = "best_epoch_state_summary.csv"
 

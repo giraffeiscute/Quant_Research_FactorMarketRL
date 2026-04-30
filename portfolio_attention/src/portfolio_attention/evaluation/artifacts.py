@@ -12,7 +12,7 @@ import torch
 from . import shared as evaluation_shared
 from ..config import EvaluationConfig
 from ..data.dataset import PortfolioPanelDataset
-from .metrics import compute_average_turnover_from_weights
+from .metrics import apply_transaction_cost_to_returns, compute_average_turnover_from_weights
 from .types import (
     BenchmarkMetrics,
     RuntimePayloadAdapter,
@@ -318,6 +318,9 @@ def _build_monitoring_scenario_artifact(
         "rolling_window_horizon_days": scenario_result.window_meta.rolling_window_horizon_days,
         "rolling_window_stride_days": scenario_result.window_meta.rolling_window_stride_days,
         "num_rolling_windows": scenario_result.window_meta.num_rolling_windows,
+        "evaluation_transaction_cost_rate": float(
+            scenario_result.extra_payload.get("evaluation_transaction_cost_rate", 0.0)
+        ),
         "total_selected_stock_count": int(scenario_result.selection_stats.total_selected_stock_count),
         "stock_count_weight_threshold": float(scenario_result.selection_stats.stock_count_weight_threshold),
         "metrics_text": metrics_text,
@@ -414,6 +417,13 @@ def _build_holdout_summary_payload(
         }
         if len(values) == 1:
             rolling_metadata[field_name] = next(iter(values))
+    cost_rate_values = {
+        float(payload.get("evaluation_transaction_cost_rate", 0.0))
+        for payload in per_scenario_payloads
+    }
+    cost_rate_metadata: dict[str, float] = {}
+    if len(cost_rate_values) == 1:
+        cost_rate_metadata["evaluation_transaction_cost_rate"] = next(iter(cost_rate_values))
     return {
         "state": dataset.state,
         "loss_name": loss_name,
@@ -430,6 +440,7 @@ def _build_holdout_summary_payload(
         "best_scenario_source_path": best_payload.identity.source_path,
         "worst_scenario_source_path": worst_payload.identity.source_path,
         **rolling_metadata,
+        **cost_rate_metadata,
     }
 
 
@@ -474,6 +485,7 @@ def _build_per_scenario_payload(
     context_target_time_indices: torch.Tensor,
     target_time_indices: torch.Tensor,
     portfolio_returns: torch.Tensor,
+    turnover: torch.Tensor,
     stock_weights: torch.Tensor,
     cash_weights: torch.Tensor,
     dataset: PortfolioPanelDataset,
@@ -486,7 +498,12 @@ def _build_per_scenario_payload(
     num_rolling_windows: int | None = None,
     evaluation_price_anchor_mode: str | None = None,
 ) -> dict[str, Any]:
-    path_returns_cpu = portfolio_returns.detach().cpu()
+    transaction_cost_rate = float(evaluation_config.evaluation_transaction_cost_rate)
+    path_returns_cpu = apply_transaction_cost_to_returns(
+        portfolio_returns.detach().cpu(),
+        turnover.detach().cpu(),
+        transaction_cost_rate=transaction_cost_rate,
+    )
     context_target_time_indices_cpu = context_target_time_indices.detach().cpu()
     stock_weights_cpu = stock_weights.detach().cpu()
     cash_weights_cpu = cash_weights.detach().cpu()
@@ -616,6 +633,7 @@ def _build_per_scenario_payload(
         ),
         train_config=_extract_exported_train_config(checkpoint),
         top_k_stock_weights=enriched_top_positions,
+        extra_payload={"evaluation_transaction_cost_rate": transaction_cost_rate},
         runtime_tensors=ScenarioRuntimeTensors(
             final_stock_weights=final_stock_weights,
             stock_weights=stock_weights_cpu,
@@ -790,6 +808,9 @@ def _export_scenario_payload(
         "effective_stock_count_min_active_days": effective_stock_count_min_active_days,
         "stock_count_lookback_days": stock_count_lookback_days,
         "total_selected_stock_count": total_selected_stock_count,
+        "evaluation_transaction_cost_rate": float(
+            scenario_payload.get("evaluation_transaction_cost_rate", 0.0)
+        ),
         "weight_trajectory_chart": str(weight_trajectory_path),
         "weight_trajectory_overview_chart": None,
     }
@@ -817,6 +838,7 @@ def build_per_scenario_payload(
     context_target_time_indices: torch.Tensor,
     target_time_indices: torch.Tensor,
     portfolio_returns: torch.Tensor,
+    turnover: torch.Tensor,
     stock_weights: torch.Tensor,
     cash_weights: torch.Tensor,
     dataset: PortfolioPanelDataset,
@@ -837,6 +859,7 @@ def build_per_scenario_payload(
         context_target_time_indices=context_target_time_indices,
         target_time_indices=target_time_indices,
         portfolio_returns=portfolio_returns,
+        turnover=turnover,
         stock_weights=stock_weights,
         cash_weights=cash_weights,
         dataset=dataset,

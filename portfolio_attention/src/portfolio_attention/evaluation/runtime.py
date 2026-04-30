@@ -177,6 +177,7 @@ def _collect_single_scenario_rolling_one_step_outputs(
         )
 
     portfolio_returns_by_day: list[torch.Tensor] = []
+    turnover_by_day: list[torch.Tensor] = []
     stock_weights_by_day: list[torch.Tensor] = []
     cash_weights_by_day: list[torch.Tensor] = []
     if interrupt_checker is not None:
@@ -225,8 +226,17 @@ def _collect_single_scenario_rolling_one_step_outputs(
                 f"{evaluation_label} expected portfolio_return with shape "
                 f"(1, {context_time_steps}), received {tuple(path_returns.shape)}."
             )
+        turnover = outputs.get("turnover")
+        if not isinstance(turnover, torch.Tensor):
+            raise RuntimeError(f"{evaluation_label} requires turnover for every window.")
+        if turnover.shape != (1, context_time_steps):
+            raise RuntimeError(
+                f"{evaluation_label} expected turnover with shape "
+                f"(1, {context_time_steps}), received {tuple(turnover.shape)}."
+            )
 
         portfolio_returns_by_day.append(path_returns[:, -1].detach().cpu().squeeze(0))
+        turnover_by_day.append(turnover[:, -1].detach().cpu().squeeze(0))
         if collect_weights:
             stock_weights = outputs.get("stock_weights")
             cash_weights = outputs.get("cash_weight")
@@ -255,8 +265,8 @@ def _collect_single_scenario_rolling_one_step_outputs(
     payload: dict[str, Any] = {
         "scenario_id": scenario_id,
         "source_path": source_path,
-        # TODO(phase-2): include turnover series so validation/evaluation can compute net returns.
         "portfolio_returns": torch.stack(portfolio_returns_by_day, dim=0),
+        "turnover": torch.stack(turnover_by_day, dim=0),
         "scored_target_time_indices": scored_target_time_indices,
         "context_target_time_indices": context_target_time_indices,
         "lookback_days": resolved_lookback_days,
@@ -299,6 +309,7 @@ def _collect_single_holdout_scenario_payload(
         context_target_time_indices=rolling_outputs["context_target_time_indices"],
         target_time_indices=rolling_outputs["scored_target_time_indices"],
         portfolio_returns=rolling_outputs["portfolio_returns"],
+        turnover=rolling_outputs["turnover"],
         stock_weights=rolling_outputs["stock_weights"],
         cash_weights=rolling_outputs["cash_weights"],
         dataset=dataset,

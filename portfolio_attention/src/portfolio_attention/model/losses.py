@@ -51,18 +51,52 @@ def _coerce_turnover(turnover: torch.Tensor | None, *, reference: torch.Tensor) 
     return turnover
 
 
-def _lagged_standardized_positive_cumulative_return_weight(
+def _coerce_allocation_sequence(allocation: torch.Tensor | None, *, reference: torch.Tensor) -> torch.Tensor | None:
+    if allocation is None:
+        return None
+    if allocation.numel() == 0:
+        raise ValueError("allocation must not be empty when provided.")
+    if allocation.ndim != 3:
+        raise ValueError(
+            "allocation must have shape [num_scenarios_in_batch, time_steps, num_assets]. "
+            f"Received {tuple(allocation.shape)}."
+        )
+    if tuple(allocation.shape[:2]) != tuple(reference.shape):
+        raise ValueError(
+            "allocation leading dimensions must match turnover shape. "
+            f"Received allocation={tuple(allocation.shape)} turnover={tuple(reference.shape)}."
+        )
+    return allocation
+
+
+def compute_allocation_change_l2(
+    allocation: torch.Tensor,
+    *,
+    previous_allocation: torch.Tensor,
+    reference: torch.Tensor,
+) -> torch.Tensor:
+    scored_allocation = _coerce_allocation_sequence(allocation, reference=reference)
+    scored_previous_allocation = _coerce_allocation_sequence(previous_allocation, reference=reference)
+    if scored_allocation is None or scored_previous_allocation is None:
+        raise ValueError("allocation and previous_allocation are required for L2 turnover penalty.")
+    if tuple(scored_previous_allocation.shape) != tuple(scored_allocation.shape):
+        raise ValueError(
+            "previous_allocation must match allocation shape. "
+            f"Received previous_allocation={tuple(scored_previous_allocation.shape)} "
+            f"allocation={tuple(scored_allocation.shape)}."
+        )
+    allocation_delta = scored_allocation - scored_previous_allocation
+    return allocation_delta.pow(2).sum(dim=-1)
+
+
+def _lagged_positive_cumulative_return_weight(
     portfolio_returns: torch.Tensor,
-    eps: float = 1e-6,
 ) -> torch.Tensor:
     cumulative_returns = torch.cumprod(1 + portfolio_returns, dim=1) - 1
     lagged_cumulative_returns = torch.zeros_like(cumulative_returns)
     if cumulative_returns.shape[1] > 1:
         lagged_cumulative_returns[:, 1:] = cumulative_returns[:, :-1]
-    if portfolio_returns.shape[1] < 2:
-        return torch.zeros_like(lagged_cumulative_returns)
-    return_std = portfolio_returns.std(dim=1, unbiased=True).unsqueeze(1).clamp_min(eps)
-    return torch.relu(lagged_cumulative_returns / return_std).detach()
+    return torch.relu(lagged_cumulative_returns).detach()
 
 
 def compute_turnover_penalty(
@@ -70,16 +104,21 @@ def compute_turnover_penalty(
     *,
     norm: str = "l1",
     portfolio_returns: torch.Tensor | None = None,
-    allocation_change_l2: torch.Tensor | None = None,
+    allocation: torch.Tensor | None = None,
+    previous_allocation: torch.Tensor | None = None,
 ) -> torch.Tensor:
     scored_turnover = _coerce_turnover(turnover, reference=_coerce_portfolio_returns(turnover))
     resolved_norm = str(norm).strip().lower()
     if resolved_norm == "l1":
         regularizer = scored_turnover.abs()
     elif resolved_norm == "l2":
-        if allocation_change_l2 is None:
-            raise ValueError("allocation_change_l2 is required when turnover_penalty_norm='l2'.")
-        regularizer = _coerce_turnover(allocation_change_l2, reference=scored_turnover)
+        if allocation is None or previous_allocation is None:
+            raise ValueError("allocation and previous_allocation are required when turnover_penalty_norm='l2'.")
+        regularizer = compute_allocation_change_l2(
+            allocation,
+            previous_allocation=previous_allocation,
+            reference=scored_turnover,
+        )
     else:
         raise ValueError(
             "turnover_penalty_norm must be one of {'l1', 'l2'}, "
@@ -95,7 +134,7 @@ def compute_turnover_penalty(
             "portfolio_returns must match turnover shape when computing weighted turnover penalty. "
             f"Received portfolio_returns={tuple(scored_returns.shape)} turnover={tuple(scored_turnover.shape)}."
         )
-    weights = _lagged_standardized_positive_cumulative_return_weight(scored_returns)
+    weights = _lagged_positive_cumulative_return_weight(scored_returns)
     return (weights * regularizer).mean()
 
 
@@ -288,7 +327,8 @@ def build_portfolio_objective_loss(
     name: str,
     portfolio_returns: torch.Tensor,
     turnover: torch.Tensor | None = None,
-    allocation_change_l2: torch.Tensor | None = None,
+    allocation: torch.Tensor | None = None,
+    previous_allocation: torch.Tensor | None = None,
     turnover_penalty: float = 0.0,
     transaction_cost_rate: float = 0.0,
     turnover_penalty_norm: str = "l1",
@@ -313,7 +353,8 @@ def build_portfolio_objective_loss(
             scored_turnover,
             norm=turnover_penalty_norm,
             portfolio_returns=objective_returns,
-            allocation_change_l2=allocation_change_l2,
+            allocation=allocation,
+            previous_allocation=previous_allocation,
         )
         loss = loss + resolved_turnover_penalty * turnover_regularizer
     return loss

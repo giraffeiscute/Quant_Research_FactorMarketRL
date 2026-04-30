@@ -167,10 +167,10 @@ class ScenarioRollingValidationMetric(Metric):
             return {
                 "val_loss": zero,
                 "val_loss_window": zero,
-                "val_mean_final_return": zero,
-                "validation_stocks_bought": zero,
-                "validation_average_turnover": zero,
-                "validation_mean_cash_weight": zero,
+                "val_return": zero,
+                "val_stock": zero,
+                "val_OT": zero,
+                "val_cash": zero,
             }
 
         scenario_count = self.scenario_count.to(dtype=self.loss_sum.dtype)
@@ -181,10 +181,10 @@ class ScenarioRollingValidationMetric(Metric):
         return {
             "val_loss": self.loss_sum / scenario_count,
             "val_loss_window": val_loss_window,
-            "val_mean_final_return": self.final_return_sum / scenario_count,
-            "validation_stocks_bought": self.selected_stock_count_sum / scenario_count,
-            "validation_average_turnover": self.average_turnover_sum / scenario_count,
-            "validation_mean_cash_weight": self.mean_cash_weight_sum / scenario_count,
+            "val_return": self.final_return_sum / scenario_count,
+            "val_stock": self.selected_stock_count_sum / scenario_count,
+            "val_OT": self.average_turnover_sum / scenario_count,
+            "val_cash": self.mean_cash_weight_sum / scenario_count,
         }
 
 

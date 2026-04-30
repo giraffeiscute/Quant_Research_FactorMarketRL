@@ -212,6 +212,7 @@ def _export_monitoring_holdout_payloads(
         "rolling_window_stride_days",
         "num_rolling_windows",
         "mean_average_turnover",
+        "evaluation_transaction_cost_rate",
     ):
         if field_name in monitoring_summary:
             manifest_payload[field_name] = monitoring_summary[field_name]
@@ -256,6 +257,7 @@ def _export_monitoring_holdout_payloads(
             "rolling_window_horizon_days": item.get("rolling_window_horizon_days"),
             "rolling_window_stride_days": item.get("rolling_window_stride_days"),
             "num_rolling_windows": item.get("num_rolling_windows"),
+            "evaluation_transaction_cost_rate": item.get("evaluation_transaction_cost_rate"),
             "weight_trajectory_chart": item.get("weight_trajectory_chart"),
             "weight_trajectory_overview_chart": overview_path_by_scenario.get(str(item["scenario_id"])),
         }

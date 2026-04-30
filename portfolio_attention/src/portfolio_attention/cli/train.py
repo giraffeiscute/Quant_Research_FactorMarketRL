@@ -177,7 +177,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Norm used for turnover regularization: "
-            "l1 keeps turnover.mean(); l2 uses turnover.pow(2).mean()."
+            "l1 keeps turnover.mean(); l2 uses asset-level allocation delta squared."
         ),
     )
     parser.add_argument("--transaction-cost-rate", type=float, default=argparse.SUPPRESS)
@@ -277,7 +277,6 @@ def resolve_runtime_configs_from_args(
         validated_data_config(resolved_data_config),
         validated_train_config(resolved_train_config),
     )
-
 
 def resolve_model_config_from_args(
     args: argparse.Namespace,

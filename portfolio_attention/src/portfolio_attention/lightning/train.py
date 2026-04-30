@@ -329,6 +329,7 @@ def _build_single_state_training_stack(
         dataset=datamodule.dataset,
         stock_count_weight_threshold=float(evaluation_config.stock_count_weight_threshold),
         stock_count_min_active_days=int(evaluation_config.stock_count_min_active_days),
+        evaluation_transaction_cost_rate=float(evaluation_config.evaluation_transaction_cost_rate),
     )
 
     checkpoint_callback = ModelCheckpoint(

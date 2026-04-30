@@ -202,6 +202,7 @@ class HoldoutPredictionModule(pl.LightningModule):
             context_target_time_indices=rolling_outputs["context_target_time_indices"],
             target_time_indices=rolling_outputs["scored_target_time_indices"],
             portfolio_returns=rolling_outputs["portfolio_returns"],
+            turnover=rolling_outputs["turnover"],
             stock_weights=rolling_outputs["stock_weights"],
             cash_weights=rolling_outputs["cash_weights"],
             dataset=self.dataset,
@@ -479,6 +480,7 @@ def run_post_training_holdout(
     train_config,
     max_epoch: int,
     devices: int | None = None,
+    evaluation_config: EvaluationConfig | None = None,
     datamodule: LightningTrainDataModule | None = None,
     interrupt_checker: Callable[[], None] | None = None,
 ) -> list[tuple[int, str]]:
@@ -515,7 +517,7 @@ def run_post_training_holdout(
     if len(resolved_datamodule.test_dataset) == 0:
         raise RuntimeError("Holdout evaluation requires a non-empty holdout test split.")
 
-    evaluation_config = EvaluationConfig()
+    evaluation_config = evaluation_config or EvaluationConfig()
     dataset_metadata = getattr(resolved_datamodule.dataset, "metadata", None)
     use_distributed_prediction = bool(
         dataset_metadata is not None and hasattr(dataset_metadata, "train_batch_size")
@@ -580,6 +582,7 @@ def run_post_training_holdout(
             dataset=resolved_datamodule.dataset,
             stock_count_weight_threshold=float(evaluation_config.stock_count_weight_threshold),
             stock_count_min_active_days=int(evaluation_config.stock_count_min_active_days),
+            evaluation_transaction_cost_rate=float(evaluation_config.evaluation_transaction_cost_rate),
         )
         try:
             lightning_module = PortfolioLightningModule.load_from_checkpoint(
@@ -739,6 +742,7 @@ def main() -> None:
 
         paths = resolve_paths_config_from_args(args)
         data_config, train_config = resolve_runtime_configs_from_args(args)
+        evaluation_config = EvaluationConfig()
         _configure_warning_routing(state=data_config.state, paths=paths)
         model_config = resolve_model_config_from_args(args)
 
@@ -749,6 +753,7 @@ def main() -> None:
             data_config=data_config,
             model_config=model_config,
             train_config=train_config,
+            evaluation_config=evaluation_config,
             max_epoch=int(train_config.num_epochs),
             devices=int(args.devices),
             interrupt_checker=_INTERRUPT_CONTROLLER.raise_if_interrupted,

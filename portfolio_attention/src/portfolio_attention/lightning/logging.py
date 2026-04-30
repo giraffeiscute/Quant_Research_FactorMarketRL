@@ -11,6 +11,21 @@ import torch
 
 CSV_METRIC_DECIMAL_PLACES = 8
 VALIDATION_STOCKS_BOUGHT_DECIMAL_PLACES = 1
+VAL_STOCK_METRIC_KEY = "val_stock"
+PREFERRED_METRIC_KEY_ORDER = [
+    "epoch",
+    "step",
+    "train_loss",
+    "train_weight_loss",
+    "train_OT",
+    "train_return",
+    "val_loss",
+    "val_loss_window",
+    "val_return",
+    "val_OT",
+    "val_stock",
+    "val_cash",
+]
 
 
 class RoundedMetricsExperimentWriter(ExperimentWriter):
@@ -26,7 +41,7 @@ class RoundedMetricsExperimentWriter(ExperimentWriter):
         if isinstance(value, float):
             decimal_places = (
                 VALIDATION_STOCKS_BOUGHT_DECIMAL_PLACES
-                if key == "validation_stocks_bought"
+                if key == VAL_STOCK_METRIC_KEY
                 else self.decimal_places
             )
             return f"{value:.{decimal_places}f}"
@@ -46,19 +61,10 @@ class RoundedMetricsExperimentWriter(ExperimentWriter):
         new_keys = current_keys - set(self.metrics_keys)
         self.metrics_keys.extend(new_keys)
         self.metrics_keys.sort()
-        self._move_metric_key_after(anchor_key="train_loss", target_key="train_weight_loss")
-        self._move_metric_key_after(anchor_key="train_weight_loss", target_key="train_OT")
+        preferred_present = [key for key in PREFERRED_METRIC_KEY_ORDER if key in self.metrics_keys]
+        remaining = [key for key in self.metrics_keys if key not in preferred_present]
+        self.metrics_keys = preferred_present + remaining
         return new_keys
-
-    def _move_metric_key_after(self, *, anchor_key: str, target_key: str) -> None:
-        if anchor_key not in self.metrics_keys or target_key not in self.metrics_keys:
-            return
-        target_index = self.metrics_keys.index(target_key)
-        anchor_index = self.metrics_keys.index(anchor_key)
-        del self.metrics_keys[target_index]
-        if target_index < anchor_index:
-            anchor_index -= 1
-        self.metrics_keys.insert(anchor_index + 1, target_key)
 
 
 class RoundedCSVLogger(CSVLogger):

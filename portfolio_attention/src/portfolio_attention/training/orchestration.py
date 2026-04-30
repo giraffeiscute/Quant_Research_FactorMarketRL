@@ -18,7 +18,7 @@ from ..common.utils import (
     resolve_device,
     save_runtime_config_artifact,
 )
-from ..config import DataConfig, ModelConfig, PathsConfig, TrainConfig
+from ..config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
 from ..config.validation import (
     validated_data_config,
     validated_model_config,
@@ -70,6 +70,7 @@ def _run_epoch_training_with_datasets(
 ) -> dict[str, Any]:
     if len(train_dataset) == 0 or len(validation_dataset) == 0 or len(test_dataset) == 0:
         raise RuntimeError("Scenario training requires non-empty train, validation, and holdout test splits.")
+    evaluation_config = EvaluationConfig()
 
     status_reporter = TrainingStatusReporter(
         paths=paths,
@@ -239,6 +240,9 @@ def _run_epoch_training_with_datasets(
                 device=device,
                 loss_name=train_config.loss_name,
                 lookback_days=int(dataset.metadata.lookback_days),
+                evaluation_transaction_cost_rate=float(
+                    evaluation_config.evaluation_transaction_cost_rate
+                ),
                 epoch=epoch,
                 num_epochs=train_config.num_epochs,
                 num_train_batches=num_train_batches,

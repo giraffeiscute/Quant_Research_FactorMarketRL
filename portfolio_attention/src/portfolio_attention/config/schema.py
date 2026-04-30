@@ -77,7 +77,7 @@ class DataConfig:
     num_test_scenarios: int = 6
 
     # Shuffle / seed
-    train_batch_size: int = 10
+    train_batch_size: int = 6
     shuffle_scenario_splits: bool = True
     scenario_split_seed: int = 456
     shuffle_train_scenarios: bool = True
@@ -91,7 +91,7 @@ class DataConfig:
     price_normalization_mode: Literal["none", "relative_to_anchor"] = "relative_to_anchor"
 
     # Number of stocks sampled per training rolling window.
-    sample_num_stocks: int = 1000
+    sample_num_stocks: int = 1500
 
     @property
     def resolved_scenario_dir(self) -> Path:
@@ -155,9 +155,9 @@ class TrainConfig:
     select_best_from_last_x_epochs: int = 1
     holdout_backtest_interval_epochs: int = 4
     enable_fixed_epoch_holdout_backtests: bool = False
-    turnover_penalty: float = 0.5
-    turnover_penalty_norm: Literal["l1", "l2"] = "l1"
-    transaction_cost_rate: float = 0.001
+    turnover_penalty: float = 5000
+    turnover_penalty_norm: Literal["l1", "l2"] = "l2"
+    transaction_cost_rate: float = 0.0
     loss_name: Literal["", "return", "sharpe", "dsr", "sortino", "mdd", "cvar"] = ""
     device: str = "auto"
     resume_from: Path | None = None
@@ -189,6 +189,7 @@ class EvaluationConfig:
     allocation_group_top_n: int = 7
     stock_count_weight_threshold: float = 0.001
     stock_count_min_active_days: int = 2
+    evaluation_transaction_cost_rate: float = 0.001
 
 
 # Backward-compatible re-export for legacy script imports.

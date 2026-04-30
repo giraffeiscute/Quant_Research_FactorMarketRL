@@ -206,7 +206,6 @@ def resolve_model_config_from_args(
         resolved_model_config = replace(resolved_model_config, **model_overrides)
     return validated_model_config(resolved_model_config)
 
-
 def main() -> None:
     args = build_arg_parser().parse_args()
     args_dict = vars(args)

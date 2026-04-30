@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from ..config import DataConfig, ModelConfig, PathsConfig, TrainConfig
 from ..data.dataset import PortfolioPanelDataset
+from ..evaluation.metrics import apply_transaction_cost_to_returns
 from ..evaluation.runtime import (
     EVALUATION_PRICE_ANCHOR_MODE_PER_WINDOW,
     ROLLING_ONE_STEP_EVALUATION_MODE,
@@ -187,33 +188,44 @@ def _run_loss_step(
             "turnover must match portfolio_returns shape. "
             f"Received turnover={tuple(turnover.shape)} portfolio_returns={tuple(portfolio_returns.shape)}."
         )
-    allocation_change_l2 = outputs.get("allocation_change_l2")
-    if not isinstance(allocation_change_l2, torch.Tensor):
-        raise RuntimeError("Training batch requires model outputs to include allocation_change_l2 tensor.")
-    if allocation_change_l2.shape != portfolio_returns.shape:
+    allocation = outputs.get("allocation")
+    if not isinstance(allocation, torch.Tensor):
+        raise RuntimeError("Training batch requires model outputs to include allocation tensor.")
+    if allocation.ndim != 3 or allocation.shape[:2] != portfolio_returns.shape:
         raise ValueError(
-            "allocation_change_l2 must match portfolio_returns shape. "
-            f"Received allocation_change_l2={tuple(allocation_change_l2.shape)} "
-            f"portfolio_returns={tuple(portfolio_returns.shape)}."
+            "allocation must have shape [num_scenarios_in_batch, time_steps, num_assets]. "
+            f"Received allocation={tuple(allocation.shape)} portfolio_returns={tuple(portfolio_returns.shape)}."
+        )
+    previous_allocation = outputs.get("previous_allocation")
+    if not isinstance(previous_allocation, torch.Tensor):
+        raise RuntimeError("Training batch requires model outputs to include previous_allocation tensor.")
+    if previous_allocation.shape != allocation.shape:
+        raise ValueError(
+            "previous_allocation must match allocation shape. "
+            f"Received previous_allocation={tuple(previous_allocation.shape)} "
+            f"allocation={tuple(allocation.shape)}."
         )
     score_mask = batch.get("score_mask")
     if score_mask is None:
         scored_returns = portfolio_returns
         scored_turnover = turnover
-        scored_allocation_change_l2 = allocation_change_l2
+        scored_allocation = allocation
+        scored_previous_allocation = previous_allocation
     else:
         if not isinstance(score_mask, torch.Tensor):
             raise ValueError("score_mask must be a tensor when provided in the batch.")
         score_mask_bool = score_mask.to(dtype=torch.bool)
         scored_returns = apply_score_mask(portfolio_returns, score_mask_bool)
         scored_turnover = apply_score_mask(turnover, score_mask_bool)
-        scored_allocation_change_l2 = apply_score_mask(allocation_change_l2, score_mask_bool)
+        scored_allocation = apply_score_mask(allocation, score_mask_bool)
+        scored_previous_allocation = apply_score_mask(previous_allocation, score_mask_bool)
 
     loss = build_portfolio_objective_loss(
         loss_name,
         scored_returns,
         turnover=scored_turnover,
-        allocation_change_l2=scored_allocation_change_l2,
+        allocation=scored_allocation,
+        previous_allocation=scored_previous_allocation,
         turnover_penalty=turnover_penalty,
         transaction_cost_rate=transaction_cost_rate,
         turnover_penalty_norm=turnover_penalty_norm,
@@ -224,7 +236,8 @@ def _run_loss_step(
             scored_turnover,
             norm=turnover_penalty_norm,
             portfolio_returns=net_scored_returns,
-            allocation_change_l2=scored_allocation_change_l2,
+            allocation=scored_allocation,
+            previous_allocation=scored_previous_allocation,
         )
     else:
         weight_loss = scored_returns.new_zeros(())
@@ -253,6 +266,7 @@ def _evaluate_epoch(
     device: torch.device,
     loss_name: str,
     lookback_days: int,
+    evaluation_transaction_cost_rate: float = 0.0,
     heartbeat_callback: Any | None = None,
 ) -> tuple[float, float, dict[str, Any]]:
     model.eval()
@@ -272,8 +286,11 @@ def _evaluate_epoch(
             evaluation_label="Validation rolling evaluation",
             collect_weights=False,
         )
-        scored_returns = rolling_outputs["portfolio_returns"].unsqueeze(0)
-        # TODO(phase-2): extend rolling validation outputs to include turnover and evaluate net returns.
+        scored_returns = apply_transaction_cost_to_returns(
+            rolling_outputs["portfolio_returns"],
+            rolling_outputs["turnover"],
+            transaction_cost_rate=evaluation_transaction_cost_rate,
+        ).unsqueeze(0)
         loss = build_loss(loss_name, scored_returns)
         summary = {
             "scenario_final_returns": torch.prod(1.0 + scored_returns, dim=1) - 1.0,
@@ -710,6 +727,7 @@ def _run_validation_epoch(
     num_train_batches: int,
     epoch_started_at: float,
     status_reporter: TrainingStatusReporter,
+    evaluation_transaction_cost_rate: float = 0.0,
 ) -> tuple[float, float, dict[str, Any]]:
     num_validation_batches = len(validation_loader)
     status_reporter.heartbeat(
@@ -749,6 +767,7 @@ def _run_validation_epoch(
         device,
         loss_name,
         lookback_days=lookback_days,
+        evaluation_transaction_cost_rate=evaluation_transaction_cost_rate,
         heartbeat_callback=_validation_heartbeat,
     )
 

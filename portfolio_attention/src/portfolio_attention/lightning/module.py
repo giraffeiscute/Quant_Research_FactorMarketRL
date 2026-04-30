@@ -10,6 +10,7 @@ import torch
 from ..config import DataConfig, ModelConfig, TrainConfig
 from ..data.dataset import PortfolioPanelDataset
 from ..evaluation.metrics import (
+    apply_transaction_cost_to_returns,
     compute_average_turnover_from_weights,
     compute_selected_stock_count_from_weights,
 )
@@ -31,6 +32,7 @@ class PortfolioLightningModule(pl.LightningModule):
         dataset: PortfolioPanelDataset,
         stock_count_weight_threshold: float,
         stock_count_min_active_days: int,
+        evaluation_transaction_cost_rate: float = 0.0,
     ) -> None:
         super().__init__()
         self.data_config = data_config
@@ -39,6 +41,7 @@ class PortfolioLightningModule(pl.LightningModule):
         self.dataset = dataset
         self.stock_count_weight_threshold = float(stock_count_weight_threshold)
         self.stock_count_min_active_days = int(stock_count_min_active_days)
+        self.evaluation_transaction_cost_rate = float(evaluation_transaction_cost_rate)
 
         self.model = build_training_model(
             model_config=model_config,
@@ -91,7 +94,7 @@ class PortfolioLightningModule(pl.LightningModule):
             batch_size=batch_size,
         )
         self._log_train_epoch_metric(
-            "train_mean_final_return",
+            "train_return",
             train_mean_final_return,
             prog_bar=False,
             batch_size=batch_size,
@@ -112,7 +115,11 @@ class PortfolioLightningModule(pl.LightningModule):
             evaluation_label="Lightning validation rolling evaluation",
             collect_weights=True,
         )
-        scored_returns = rolling_outputs["portfolio_returns"].unsqueeze(0)
+        scored_returns = apply_transaction_cost_to_returns(
+            rolling_outputs["portfolio_returns"],
+            rolling_outputs["turnover"],
+            transaction_cost_rate=self.evaluation_transaction_cost_rate,
+        ).unsqueeze(0)
         loss = build_loss(self.train_config.loss_name, scored_returns)
         window_loss, window_count = compute_validation_window_objective_loss(
             model=self.model,
@@ -124,7 +131,7 @@ class PortfolioLightningModule(pl.LightningModule):
             rolling_stride_days=int(self.dataset.metadata.rolling_stride_days),
             loss_name=self.train_config.loss_name,
             turnover_penalty=float(self.train_config.turnover_penalty),
-            transaction_cost_rate=float(self.train_config.transaction_cost_rate),
+            transaction_cost_rate=float(self.evaluation_transaction_cost_rate),
             turnover_penalty_norm=str(self.train_config.turnover_penalty_norm),
         )
         scenario_final_return = (torch.prod(1.0 + scored_returns, dim=1) - 1.0).mean()
@@ -154,23 +161,23 @@ class PortfolioLightningModule(pl.LightningModule):
         self._log_validation_epoch_metric("val_loss", metrics["val_loss"], prog_bar=True)
         self._log_validation_epoch_metric("val_loss_window", metrics["val_loss_window"], prog_bar=False)
         self._log_validation_epoch_metric(
-            "val_mean_final_return",
-            metrics["val_mean_final_return"],
+            "val_return",
+            metrics["val_return"],
             prog_bar=True,
         )
         self._log_validation_epoch_metric(
-            "validation_stocks_bought",
-            metrics["validation_stocks_bought"],
+            "val_stock",
+            metrics["val_stock"],
             prog_bar=False,
         )
         self._log_validation_epoch_metric(
-            "validation_average_turnover",
-            metrics["validation_average_turnover"],
+            "val_OT",
+            metrics["val_OT"],
             prog_bar=False,
         )
         self._log_validation_epoch_metric(
-            "validation_mean_cash_weight",
-            metrics["validation_mean_cash_weight"],
+            "val_cash",
+            metrics["val_cash"],
             prog_bar=False,
         )
 

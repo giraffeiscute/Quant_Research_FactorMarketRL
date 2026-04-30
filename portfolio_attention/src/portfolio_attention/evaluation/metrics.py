@@ -5,6 +5,28 @@ from __future__ import annotations
 import torch
 
 
+def apply_transaction_cost_to_returns(
+    portfolio_returns: torch.Tensor,
+    turnover: torch.Tensor,
+    *,
+    transaction_cost_rate: float,
+) -> torch.Tensor:
+    if portfolio_returns.shape != turnover.shape:
+        raise ValueError(
+            "portfolio_returns and turnover must have the same shape when applying transaction costs. "
+            f"Received portfolio_returns={tuple(portfolio_returns.shape)} turnover={tuple(turnover.shape)}."
+        )
+    resolved_transaction_cost_rate = float(transaction_cost_rate)
+    if resolved_transaction_cost_rate < 0.0:
+        raise ValueError(
+            "transaction_cost_rate must be non-negative, "
+            f"received {resolved_transaction_cost_rate}."
+        )
+    if resolved_transaction_cost_rate == 0.0:
+        return portfolio_returns
+    return portfolio_returns - resolved_transaction_cost_rate * turnover
+
+
 def compute_selected_stock_count_from_weights(
     stock_weights: torch.Tensor,
     *,
@@ -53,3 +75,4 @@ def compute_average_turnover_from_weights(
 
 _compute_selected_stock_count_from_weights = compute_selected_stock_count_from_weights
 _compute_average_turnover_from_weights = compute_average_turnover_from_weights
+_apply_transaction_cost_to_returns = apply_transaction_cost_to_returns
