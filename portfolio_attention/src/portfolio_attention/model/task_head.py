@@ -63,7 +63,11 @@ class MLPPortfolioHead(nn.Module):
         stock_logits = self.stock_score(stock_features).squeeze(-1)
         cash_logit = self.cash_score(cash_features).squeeze(-1)
         allocation_logits = torch.cat([stock_logits, cash_logit.unsqueeze(-1)], dim=-1)
-        allocation_distribution_result = self.allocation_distribution(allocation_logits)
+        allocation_distribution_result = self.allocation_distribution(
+            allocation_logits,
+            debug_context="MLPPortfolioHead.forward",
+            logits_name="allocation_logits",
+        )
         raw_allocation = allocation_distribution_result.raw_allocation
         return TaskHeadResult(
             stock_logits=stock_logits,
@@ -137,7 +141,11 @@ class AttentionPortfolioHead(nn.Module):
             cash_state_base = self.cash_state_mlp_base(cash_base_input)
             cash_logit = self.cash_cross_attention_score(cash_state_base).squeeze(-1)
             allocation_logits = torch.cat([stock_logits, cash_logit.unsqueeze(-1)], dim=-1)
-            allocation_distribution_result = self.allocation_distribution(allocation_logits)
+            allocation_distribution_result = self.allocation_distribution(
+                allocation_logits,
+                debug_context="AttentionPortfolioHead.forward use_prev_weight_feature=False",
+                logits_name="allocation_logits",
+            )
             raw_allocation = allocation_distribution_result.raw_allocation
             assert stock_logits.shape == (num_scenarios, time_steps, num_stocks)
             assert cash_logit.shape == (num_scenarios, time_steps)
@@ -195,7 +203,14 @@ class AttentionPortfolioHead(nn.Module):
             cash_logit_t = self.cash_cross_attention_score(cash_state_repr).squeeze(-1)
 
             allocation_logits_t = torch.cat([stock_logit_t, cash_logit_t.unsqueeze(-1)], dim=-1)
-            allocation_distribution_result_t = self.allocation_distribution(allocation_logits_t)
+            allocation_distribution_result_t = self.allocation_distribution(
+                allocation_logits_t,
+                debug_context=(
+                    "AttentionPortfolioHead.forward use_prev_weight_feature=True "
+                    f"time_index={time_index}"
+                ),
+                logits_name="allocation_logits_t",
+            )
             allocation_distribution_debug_info = allocation_distribution_result_t.debug_info
             raw_t = allocation_distribution_result_t.raw_allocation
             if allocation_distribution_result_t.alpha is not None:

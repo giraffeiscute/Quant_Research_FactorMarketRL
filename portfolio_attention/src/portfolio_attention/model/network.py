@@ -272,17 +272,23 @@ class PortfolioAttentionModel(nn.Module):
     def _build_allocation_distribution_debug_info(
         self,
         allocation_alpha: torch.Tensor | None,
+        *,
+        include_alpha_debug_stats: bool = False,
     ) -> dict[str, Any]:
         if self.allocation_distribution_type == "softmax":
             return {
                 "allocation_distribution_type": "softmax",
                 "allocation_sampling_mode": "deterministic",
                 "dirichlet_alpha_offset": None,
-                "dirichlet_alpha_min": None,
-                "dirichlet_alpha_max": None,
-                "dirichlet_alpha_mean": None,
-                "dirichlet_alpha_sum_mean": None,
             }
+
+        debug_info: dict[str, Any] = {
+            "allocation_distribution_type": "dirichlet",
+            "allocation_sampling_mode": "rsample" if self.training else "mean",
+            "dirichlet_alpha_offset": self.dirichlet_alpha_offset,
+        }
+        if not include_alpha_debug_stats:
+            return debug_info
 
         if allocation_alpha is None:
             raise RuntimeError(
@@ -291,15 +297,15 @@ class PortfolioAttentionModel(nn.Module):
 
         alpha_detached = allocation_alpha.detach()
         alpha_sum = alpha_detached.sum(dim=-1)
-        return {
-            "allocation_distribution_type": "dirichlet",
-            "allocation_sampling_mode": "rsample" if self.training else "mean",
-            "dirichlet_alpha_offset": self.dirichlet_alpha_offset,
-            "dirichlet_alpha_min": alpha_detached.min().item(),
-            "dirichlet_alpha_max": alpha_detached.max().item(),
-            "dirichlet_alpha_mean": alpha_detached.mean().item(),
-            "dirichlet_alpha_sum_mean": alpha_sum.mean().item(),
-        }
+        debug_info.update(
+            {
+                "dirichlet_alpha_min": alpha_detached.min().item(),
+                "dirichlet_alpha_max": alpha_detached.max().item(),
+                "dirichlet_alpha_mean": alpha_detached.mean().item(),
+                "dirichlet_alpha_sum_mean": alpha_sum.mean().item(),
+            }
+        )
+        return debug_info
 
     def forward(
         self,

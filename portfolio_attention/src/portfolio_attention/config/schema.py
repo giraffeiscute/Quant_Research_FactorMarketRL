@@ -77,7 +77,7 @@ class DataConfig:
     num_test_scenarios: int = 6
 
     # Shuffle / seed
-    train_batch_size: int = 6
+    train_batch_size: int = 10
     shuffle_scenario_splits: bool = True
     scenario_split_seed: int = 456
     shuffle_train_scenarios: bool = True
@@ -86,12 +86,12 @@ class DataConfig:
     # Rolling window
     lookback_days: int = 50
     rolling_horizon_days: int = 30
-    rolling_stride_days: int = 2
+    rolling_stride_days: int = 1
     rolling_train_dataset_mode: Literal["lazy", "eager"] = "lazy"
     price_normalization_mode: Literal["none", "relative_to_anchor"] = "relative_to_anchor"
 
     # Number of stocks sampled per training rolling window.
-    sample_num_stocks: int = 1500
+    sample_num_stocks: int = 1000
 
     @property
     def resolved_scenario_dir(self) -> Path:
@@ -123,11 +123,11 @@ class ModelConfig:
     stock_feature_dim: int = 4
     market_feature_dim: int = 3
     market_temporal_dim: int = 16
-    stock_temporal_dim: int = 16
-    cross_sectional_dim: int = 16
+    stock_temporal_dim: int = 32
+    cross_sectional_dim: int = 32
     dropout: float = 0.1
     stock_id_representation_type: Literal["learning", "gaussian"] = "learning"
-    stock_id_embedding_dim: int = 16
+    stock_id_embedding_dim: int = 32
     stock_embedding_type: Literal["concat", "pre_temporal"] = "pre_temporal"
     stock_temporal_encoder_type: Literal["running_summary", "causal_self_attention"] = "causal_self_attention"
     stock_cross_sectional_encoder_type: Literal["mlp", "self_attention"] = "self_attention"
@@ -136,8 +136,8 @@ class ModelConfig:
     initial_allocation_mode: Literal["equal_weight", "random_dirichlet"] = "random_dirichlet"
     initial_random_concentration: float = 5
     allocation_distribution_type: Literal["softmax", "dirichlet"] = "softmax"
-    dirichlet_alpha_offset: float = 0.1
-    detach_prev_weight: bool = False
+    dirichlet_alpha_offset: float = 0.5
+    detach_prev_weight: bool = True
     use_prev_weight_feature: bool = True
 
     def as_dict(self) -> dict:
@@ -150,16 +150,16 @@ class TrainConfig:
 
     seed: int = 42
     learning_rate: float = 3e-4
-    num_epochs: int = 30
+    num_epochs: int = 150
     weight_decay: float = 3e-4
     grad_clip_norm: float = 1.0
-    early_stopping_patience: int = 7
+    early_stopping_patience: int = 80
     select_best_from_last_x_epochs: int = 1
     holdout_backtest_interval_epochs: int = 4
     enable_fixed_epoch_holdout_backtests: bool = False
-    turnover_penalty: float = 5000
+    turnover_penalty: float = 0
     turnover_penalty_norm: Literal["l1", "l2"] = "l2"
-    transaction_cost_rate: float = 0.0
+    transaction_cost_rate: float = 0.001
     loss_name: Literal["", "return", "sharpe", "dsr", "sortino", "mdd", "cvar"] = ""
     device: str = "auto"
     resume_from: Path | None = None

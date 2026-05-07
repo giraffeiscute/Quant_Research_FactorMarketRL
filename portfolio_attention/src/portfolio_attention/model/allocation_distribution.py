@@ -18,6 +18,37 @@ class AllocationDistributionResult:
     debug_info: dict[str, Any] | None = None
 
 
+def _format_nonfinite_tensor_summary(tensor: torch.Tensor, *, name: str) -> str:
+    detached = tensor.detach()
+    finite_mask = torch.isfinite(detached)
+    invalid_mask = ~finite_mask
+    invalid_indices = torch.nonzero(invalid_mask, as_tuple=False)
+    first_invalid_index = (
+        tuple(int(value) for value in invalid_indices[0].tolist())
+        if invalid_indices.numel() > 0
+        else None
+    )
+    return (
+        f"{name} contains non-finite values: "
+        f"shape={tuple(detached.shape)} dtype={detached.dtype} device={detached.device} "
+        f"first_invalid_index={first_invalid_index}"
+    )
+
+
+def _raise_if_not_finite(
+    tensor: torch.Tensor,
+    *,
+    name: str,
+    debug_context: str | None,
+) -> None:
+    if torch.isfinite(tensor).all():
+        return
+    context = f" context={debug_context}" if debug_context else ""
+    raise FloatingPointError(
+        f"{_format_nonfinite_tensor_summary(tensor, name=name)}.{context}"
+    )
+
+
 class AllocationDistribution(nn.Module):
     """Convert allocation logits into raw portfolio allocation weights.
 
@@ -49,9 +80,21 @@ class AllocationDistribution(nn.Module):
         self.allocation_distribution_type = allocation_distribution_type
         self.dirichlet_alpha_offset = dirichlet_alpha_offset
 
-    def forward(self, logits: torch.Tensor) -> AllocationDistributionResult:
+    def forward(
+        self,
+        logits: torch.Tensor,
+        *,
+        debug_context: str | None = None,
+        logits_name: str = "allocation_logits",
+    ) -> AllocationDistributionResult:
+        _raise_if_not_finite(logits, name=logits_name, debug_context=debug_context)
         if self.allocation_distribution_type == "softmax":
             raw_allocation = torch.softmax(logits, dim=-1)
+            _raise_if_not_finite(
+                raw_allocation,
+                name="raw_allocation",
+                debug_context=debug_context,
+            )
             return AllocationDistributionResult(
                 raw_allocation=raw_allocation,
                 alpha=None,
@@ -59,23 +102,23 @@ class AllocationDistribution(nn.Module):
                     "allocation_distribution_type": "softmax",
                     "allocation_sampling_mode": "deterministic",
                     "dirichlet_alpha_offset": None,
-                    "dirichlet_alpha_min": None,
-                    "dirichlet_alpha_max": None,
-                    "dirichlet_alpha_mean": None,
-                    "dirichlet_alpha_sum_mean": None,
                 },
             )
 
         alpha = F.softplus(logits) + self.dirichlet_alpha_offset
+        _raise_if_not_finite(alpha, name="dirichlet_alpha", debug_context=debug_context)
         if self.training:
             raw_allocation = Dirichlet(alpha).rsample()
             sampling_mode = "rsample"
         else:
             raw_allocation = alpha / alpha.sum(dim=-1, keepdim=True)
             sampling_mode = "mean"
+        _raise_if_not_finite(
+            raw_allocation,
+            name="raw_allocation",
+            debug_context=debug_context,
+        )
 
-        alpha_detached = alpha.detach()
-        alpha_sum = alpha_detached.sum(dim=-1)
         return AllocationDistributionResult(
             raw_allocation=raw_allocation,
             alpha=alpha,
@@ -83,9 +126,5 @@ class AllocationDistribution(nn.Module):
                 "allocation_distribution_type": "dirichlet",
                 "allocation_sampling_mode": sampling_mode,
                 "dirichlet_alpha_offset": self.dirichlet_alpha_offset,
-                "dirichlet_alpha_min": alpha_detached.min().item(),
-                "dirichlet_alpha_max": alpha_detached.max().item(),
-                "dirichlet_alpha_mean": alpha_detached.mean().item(),
-                "dirichlet_alpha_sum_mean": alpha_sum.mean().item(),
             },
         )
