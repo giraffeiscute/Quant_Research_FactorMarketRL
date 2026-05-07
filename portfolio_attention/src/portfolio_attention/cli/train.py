@@ -16,9 +16,18 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
-from ..config import DataConfig, ModelConfig, PathsConfig, TrainConfig, default_scenario_dir
+from ..config import (
+    DataConfig,
+    EvaluationConfig,
+    ModelConfig,
+    PathsConfig,
+    TrainConfig,
+    default_scenario_dir,
+    load_experiment_config,
+)
 from ..config.validation import (
     validated_data_config,
+    validated_evaluation_config,
     validated_model_config,
     validated_train_config,
 )
@@ -125,6 +134,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Run training for portfolio_attention.",
         prog="python -m portfolio_attention.cli.train",
     )
+    parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--output-root", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--state", type=str, default=argparse.SUPPRESS)
     parser.add_argument("--states", type=str, default=argparse.SUPPRESS)
@@ -198,12 +208,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _experiment_config_from_args(args: argparse.Namespace):
+    return load_experiment_config(vars(args).get("config"))
+
+
 def resolve_paths_config_from_args(
     args: argparse.Namespace,
     *,
     paths: PathsConfig | None = None,
 ) -> PathsConfig:
-    resolved_paths = paths or PathsConfig()
+    resolved_paths = paths or _experiment_config_from_args(args).paths
     args_dict = vars(args)
 
     if "output_root" in args_dict:
@@ -220,8 +234,19 @@ def resolve_runtime_configs_from_args(
     data_config: DataConfig | None = None,
     train_config: TrainConfig | None = None,
 ) -> tuple[DataConfig, TrainConfig]:
-    resolved_data_config = validated_data_config(data_config or DataConfig())
-    resolved_train_config = validated_train_config(train_config or TrainConfig())
+    experiment_config = (
+        None
+        if data_config is not None and train_config is not None
+        else _experiment_config_from_args(args)
+    )
+    resolved_data_config = validated_data_config(
+        data_config
+        or (experiment_config.data if experiment_config is not None else DataConfig())
+    )
+    resolved_train_config = validated_train_config(
+        train_config
+        or (experiment_config.train if experiment_config is not None else TrainConfig())
+    )
     args_dict = vars(args)
 
     data_overrides: dict[str, Any] = {}
@@ -283,7 +308,9 @@ def resolve_model_config_from_args(
     *,
     model_config: ModelConfig | None = None,
 ) -> ModelConfig:
-    resolved_model_config = validated_model_config(model_config or ModelConfig())
+    resolved_model_config = validated_model_config(
+        model_config or _experiment_config_from_args(args).model
+    )
     args_dict = vars(args)
 
     model_overrides: dict[str, Any] = {}
@@ -308,6 +335,16 @@ def resolve_model_config_from_args(
     if model_overrides:
         resolved_model_config = replace(resolved_model_config, **model_overrides)
     return validated_model_config(resolved_model_config)
+
+
+def resolve_evaluation_config_from_args(
+    args: argparse.Namespace,
+    *,
+    evaluation_config: EvaluationConfig | None = None,
+) -> EvaluationConfig:
+    if evaluation_config is not None:
+        return validated_evaluation_config(evaluation_config)
+    return _experiment_config_from_args(args).evaluation
 
 
 def _normalize_losses(raw_losses: list[str]) -> list[str]:
@@ -337,6 +374,9 @@ def _parse_losses_args(args: argparse.Namespace) -> list[str]:
         if not raw or not raw.strip():
             raise ValueError("--losses cannot be empty string")
         return _normalize_losses(raw.split(","))
+    config_loss_name = _experiment_config_from_args(args).train.loss_name
+    if config_loss_name:
+        return _normalize_losses([config_loss_name])
     return list(DEFAULT_LOSSES)
 
 
@@ -371,7 +411,7 @@ def _parse_states_args(args: argparse.Namespace) -> list[str]:
         if not parsed:
             raise ValueError("--states must include at least one valid state")
         return parsed
-    return [DataConfig().state]
+    return [_experiment_config_from_args(args).data.state]
 
 
 def _parse_resume_checkpoints_arg(args: argparse.Namespace) -> dict[str, Path] | None:

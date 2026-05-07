@@ -1,6 +1,7 @@
 """Configuration facade with backward-compatible public exports."""
 
 from .paths import default_scenario_dir, project_root, repo_root
+from .loader import ExperimentConfig, load_experiment_config
 from .schema import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
 from .validation import (
     LEGACY_LOOKBACK_MODES,
@@ -21,10 +22,12 @@ from .validation import (
 __all__ = [
     "DataConfig",
     "EvaluationConfig",
+    "ExperimentConfig",
     "ModelConfig",
     "PathsConfig",
     "TrainConfig",
     "default_scenario_dir",
+    "load_experiment_config",
     "project_root",
     "repo_root",
     "LEGACY_LOOKBACK_MODES",

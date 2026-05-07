@@ -68,6 +68,7 @@ if __package__ is None or __package__ == "":
         build_arg_parser,
         resolve_model_config_from_args,
         resolve_paths_config_from_args,
+        resolve_evaluation_config_from_args,
         resolve_runtime_configs_from_args,
     )
     from portfolio_attention.training.engine import _run_loss_step, build_training_model
@@ -108,6 +109,7 @@ else:
         build_arg_parser,
         resolve_model_config_from_args,
         resolve_paths_config_from_args,
+        resolve_evaluation_config_from_args,
         resolve_runtime_configs_from_args,
     )
     from ..training.engine import _run_loss_step, build_training_model
@@ -242,7 +244,7 @@ def _resolve_single_state_runtime(
     _INTERRUPT_CONTROLLER.raise_if_interrupted()
     paths = resolve_paths_config_from_args(args)
     data_config, train_config = resolve_runtime_configs_from_args(args)
-    evaluation_config = EvaluationConfig()
+    evaluation_config = resolve_evaluation_config_from_args(args)
     _configure_warning_routing(state=data_config.state, paths=paths)
     model_config = resolve_model_config_from_args(args)
 

@@ -77,7 +77,7 @@ class DataConfig:
     num_test_scenarios: int = 6
 
     # Shuffle / seed
-    train_batch_size: int = 10
+    train_batch_size: int = 30
     shuffle_scenario_splits: bool = True
     scenario_split_seed: int = 456
     shuffle_train_scenarios: bool = True
@@ -137,7 +137,7 @@ class ModelConfig:
     initial_random_concentration: float = 5
     allocation_distribution_type: Literal["softmax", "dirichlet"] = "softmax"
     dirichlet_alpha_offset: float = 0.5
-    detach_prev_weight: bool = True
+    detach_prev_weight: bool = False
     use_prev_weight_feature: bool = True
 
     def as_dict(self) -> dict:
@@ -157,11 +157,11 @@ class TrainConfig:
     select_best_from_last_x_epochs: int = 1
     holdout_backtest_interval_epochs: int = 4
     enable_fixed_epoch_holdout_backtests: bool = False
-    turnover_penalty: float = 0
+    turnover_penalty: float = 5000
     turnover_penalty_norm: Literal["l1", "l2"] = "l2"
     transaction_cost_rate: float = 0.001
     loss_name: Literal["", "return", "sharpe", "dsr", "sortino", "mdd", "cvar"] = ""
-    device: str = "auto"
+    device: str = "cuda"
     resume_from: Path | None = None
     def _checkpoint_name(self, stem: str, state: str | None = None) -> str:
         prefix = f"{state}_" if state else ""

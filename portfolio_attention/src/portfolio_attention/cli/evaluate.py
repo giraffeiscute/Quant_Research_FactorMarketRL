@@ -11,11 +11,14 @@ import torch
 
 from portfolio_attention.config import (
     DataConfig,
+    EvaluationConfig,
     ModelConfig,
     PathsConfig,
+    load_experiment_config,
 )
 from portfolio_attention.config.validation import (
     validated_data_config,
+    validated_evaluation_config,
     validated_model_config,
 )
 from portfolio_attention.evaluation import (
@@ -101,6 +104,7 @@ def _format_monitoring_overview_backfill_terminal_summary(generated_paths: list[
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run evaluation for portfolio_attention.")
+    parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--output-root", type=Path, default=argparse.SUPPRESS)
@@ -150,12 +154,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _experiment_config_from_args(args: argparse.Namespace):
+    return load_experiment_config(vars(args).get("config"))
+
+
 def resolve_paths_config_from_args(
     args: argparse.Namespace,
     *,
     paths: PathsConfig | None = None,
 ) -> PathsConfig:
-    resolved_paths = paths or PathsConfig()
+    resolved_paths = paths or _experiment_config_from_args(args).paths
     args_dict = vars(args)
     if "output_root" in args_dict:
         return PathsConfig(
@@ -170,7 +178,9 @@ def resolve_data_config_from_args(
     *,
     data_config: DataConfig | None = None,
 ) -> DataConfig:
-    resolved_data_config = validated_data_config(data_config or DataConfig())
+    resolved_data_config = validated_data_config(
+        data_config or _experiment_config_from_args(args).data
+    )
     args_dict = vars(args)
     data_overrides: dict[str, Any] = {}
     if "sample_num_stocks" in args_dict:
@@ -185,7 +195,9 @@ def resolve_model_config_from_args(
     *,
     model_config: ModelConfig | None = None,
 ) -> ModelConfig:
-    resolved_model_config = validated_model_config(model_config or ModelConfig())
+    resolved_model_config = validated_model_config(
+        model_config or _experiment_config_from_args(args).model
+    )
     args_dict = vars(args)
     model_overrides: dict[str, Any] = {}
     if "stock_id_representation_type" in args_dict:
@@ -206,10 +218,23 @@ def resolve_model_config_from_args(
         resolved_model_config = replace(resolved_model_config, **model_overrides)
     return validated_model_config(resolved_model_config)
 
+
+def resolve_evaluation_config_from_args(
+    args: argparse.Namespace,
+    *,
+    evaluation_config: EvaluationConfig | None = None,
+) -> EvaluationConfig:
+    if evaluation_config is not None:
+        return validated_evaluation_config(evaluation_config)
+    return _experiment_config_from_args(args).evaluation
+
+
 def main() -> None:
     args = build_arg_parser().parse_args()
     args_dict = vars(args)
     paths = resolve_paths_config_from_args(args)
+    evaluation_config = resolve_evaluation_config_from_args(args)
+    loss_name = args.loss or _experiment_config_from_args(args).train.loss_name or None
     if args.backfill_monitoring_holdout_overviews:
         if args.checkpoint is not None:
             raise ValueError("--checkpoint cannot be used with --backfill-monitoring-holdout-overviews.")
@@ -218,7 +243,7 @@ def main() -> None:
                 "--refresh-existing-scenario-artifacts cannot be used with "
                 "--backfill-monitoring-holdout-overviews."
             )
-        if args.loss is not None:
+        if loss_name is not None:
             raise ValueError("--loss cannot be used with --backfill-monitoring-holdout-overviews.")
         generated_paths = evaluation_rebuild.backfill_monitoring_holdout_backtest_overviews(
             paths=paths,
@@ -237,7 +262,7 @@ def main() -> None:
             paths=paths,
             run_evaluation_fn=evaluation_pipeline.run_evaluation,
             device_name=args.device,
-            loss_name=args.loss,
+            loss_name=loss_name,
         )
         print(_format_refresh_terminal_summary(payloads))
         return
@@ -249,7 +274,7 @@ def main() -> None:
         paths=paths,
         data_config=requested_data_config,
         checkpoint_path=args.checkpoint,
-        loss_name=args.loss,
+        loss_name=loss_name,
     )
     checkpoint = torch.load(resolved_checkpoint, map_location="cpu", weights_only=False)
     _validate_requested_runtime_configs_against_checkpoint(
@@ -263,7 +288,8 @@ def main() -> None:
         paths=paths,
         checkpoint_path=resolved_checkpoint,
         device_name=args.device,
-        loss_name=args.loss,
+        evaluation_config=evaluation_config,
+        loss_name=loss_name,
     )
     print(_format_terminal_summary(payload))
 
