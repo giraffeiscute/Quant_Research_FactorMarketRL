@@ -230,7 +230,11 @@ def _run_loss_step(
         transaction_cost_rate=transaction_cost_rate,
         turnover_penalty_norm=turnover_penalty_norm,
     )
-    net_scored_returns = scored_returns - float(transaction_cost_rate) * scored_turnover
+    net_scored_returns = apply_transaction_cost_to_returns(
+        scored_returns,
+        scored_turnover,
+        transaction_cost_rate=float(transaction_cost_rate),
+    )
     if float(turnover_penalty) > 0.0:
         weight_loss = float(turnover_penalty) * compute_turnover_penalty(
             scored_turnover,
@@ -242,13 +246,39 @@ def _run_loss_step(
     else:
         weight_loss = scored_returns.new_zeros(())
     scenario_final_returns = torch.prod(1.0 + net_scored_returns, dim=1) - 1.0
+    scored_return_std = net_scored_returns.std(dim=1, unbiased=True)
+    allocation_logits = outputs.get("allocation_logits")
+    raw_allocation = outputs.get("raw_allocation")
+    allocation_alpha = outputs.get("allocation_alpha")
+    if not isinstance(allocation_logits, torch.Tensor):
+        raise RuntimeError("Training batch requires model outputs to include allocation_logits tensor.")
+    if not isinstance(raw_allocation, torch.Tensor):
+        raise RuntimeError("Training batch requires model outputs to include raw_allocation tensor.")
     summary = {
         "scenario_final_returns": scenario_final_returns,
         "scenario_mean_step_returns": net_scored_returns.mean(dim=1),
         "scenario_gross_final_returns": torch.prod(1.0 + scored_returns, dim=1) - 1.0,
         "weight_loss": weight_loss,
         "mean_turnover": scored_turnover.mean(),
+        "return_mean_min": net_scored_returns.mean(dim=1).min(),
+        "return_mean_max": net_scored_returns.mean(dim=1).max(),
+        "return_std_min": scored_return_std.min(),
+        "return_std_max": scored_return_std.max(),
+        "allocation_logits_abs_max": allocation_logits.detach().abs().max(),
+        "raw_allocation_min": raw_allocation.detach().min(),
+        "raw_allocation_max": raw_allocation.detach().max(),
     }
+    if isinstance(allocation_alpha, torch.Tensor):
+        alpha_detached = allocation_alpha.detach()
+        alpha_sum = alpha_detached.sum(dim=-1)
+        summary.update(
+            {
+                "dirichlet_alpha_min": alpha_detached.min(),
+                "dirichlet_alpha_max": alpha_detached.max(),
+                "dirichlet_alpha_mean": alpha_detached.mean(),
+                "dirichlet_alpha_sum_mean": alpha_sum.mean(),
+            }
+        )
     return loss, net_scored_returns, summary
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
@@ -30,52 +29,6 @@ WEIGHT_TRAJECTORY_OVERVIEW_FILENAME_SUFFIX = evaluation_shared.WEIGHT_TRAJECTORY
 
 def _monitoring_holdout_backtest_manifest_path(output_dir: Path, loss_name: str) -> Path:
     return artifact_paths.monitoring_manifest_path(output_dir, loss_name)
-
-
-def _runtime_config_snapshot_path(paths: PathsConfig, state: str, loss_name: str) -> Path:
-    return paths.get_state_predictions_dir(state) / f"{loss_name}_runtime_config.json"
-
-
-def _to_json_compatible_value(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _to_json_compatible_value(inner) for key, inner in value.items()}
-    if isinstance(value, list):
-        return [_to_json_compatible_value(inner) for inner in value]
-    if isinstance(value, tuple):
-        return [_to_json_compatible_value(inner) for inner in value]
-    return value
-
-
-def _serialize_runtime_config(config: object) -> dict[str, Any]:
-    serialized = asdict(config)  # type: ignore[arg-type]
-    return _to_json_compatible_value(serialized)
-
-
-def _save_runtime_config_snapshot(
-    *,
-    paths: PathsConfig,
-    state: str,
-    loss_name: str,
-    epoch: int,
-    holdout_backtest_output_dir: str,
-    data_config: DataConfig,
-    model_config: ModelConfig,
-    train_config: TrainConfig,
-) -> None:
-    payload = {
-        "artifact_type": "runtime_config_snapshot",
-        "generated_from": "monitoring_holdout_backtest",
-        "state": state,
-        "loss_name": loss_name,
-        "epoch": int(epoch),
-        "holdout_backtest_output_dir": holdout_backtest_output_dir,
-        "data_config": _serialize_runtime_config(data_config),
-        "model_config": _serialize_runtime_config(model_config),
-        "train_config": _serialize_runtime_config(train_config),
-    }
-    save_json(payload, _runtime_config_snapshot_path(paths, state, loss_name))
 
 
 def compute_monitoring_holdout_backtest_payload(
@@ -348,17 +301,4 @@ def run_monitoring_holdout_backtest_from_per_scenario_payloads(
         evaluation_config=resolved_evaluation_config,
         interrupt_checker=interrupt_checker,
     )
-    if data_config is not None and model_config is not None and train_config is not None:
-        if interrupt_checker is not None:
-            interrupt_checker()
-        _save_runtime_config_snapshot(
-            paths=paths,
-            state=dataset.state,
-            loss_name=str(monitoring_result["loss_name"]),
-            epoch=int(monitoring_result["epoch"]),
-            holdout_backtest_output_dir=str(monitoring_result["holdout_backtest_output_dir"]),
-            data_config=data_config,
-            model_config=model_config,
-            train_config=train_config,
-        )
     return monitoring_result

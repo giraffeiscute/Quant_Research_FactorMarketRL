@@ -7,6 +7,8 @@ from typing import Literal
 
 import torch
 
+from ..evaluation.metrics import apply_transaction_cost_to_returns
+
 
 def _coerce_portfolio_returns(portfolio_returns: torch.Tensor) -> torch.Tensor:
     if portfolio_returns.numel() == 0:
@@ -343,7 +345,11 @@ def build_portfolio_objective_loss(
     if resolved_transaction_cost_rate > 0.0:
         if scored_turnover is None:
             raise ValueError("turnover is required when transaction_cost_rate > 0.")
-        objective_returns = scored_returns - resolved_transaction_cost_rate * scored_turnover
+        objective_returns = apply_transaction_cost_to_returns(
+            scored_returns,
+            scored_turnover,
+            transaction_cost_rate=resolved_transaction_cost_rate,
+        )
 
     loss = build_loss(name, objective_returns, **kwargs)
     if resolved_turnover_penalty > 0.0:

@@ -77,7 +77,7 @@ class DataConfig:
     num_test_scenarios: int = 6
 
     # Shuffle / seed
-    train_batch_size: int = 30
+    train_batch_size: int = 10
     shuffle_scenario_splits: bool = True
     scenario_split_seed: int = 456
     shuffle_train_scenarios: bool = True
@@ -153,13 +153,15 @@ class TrainConfig:
     num_epochs: int = 150
     weight_decay: float = 3e-4
     grad_clip_norm: float = 1.0
+    grad_monitor_interval_steps: int = 0
+    grad_monitor_fail_fast: bool = True
     early_stopping_patience: int = 80
     select_best_from_last_x_epochs: int = 1
     holdout_backtest_interval_epochs: int = 4
     enable_fixed_epoch_holdout_backtests: bool = False
     turnover_penalty: float = 5000
     turnover_penalty_norm: Literal["l1", "l2"] = "l2"
-    transaction_cost_rate: float = 0.001
+    transaction_cost_rate: float = 0
     loss_name: Literal["", "return", "sharpe", "dsr", "sortino", "mdd", "cvar"] = ""
     device: str = "cuda"
     resume_from: Path | None = None

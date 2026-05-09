@@ -57,6 +57,7 @@ if __package__ is None or __package__ == "":
         RoundedCSVLogger,
         RoundedMetricsExperimentWriter,
     )
+    from portfolio_attention.lightning.gradient_diagnostics import gradient_diagnostics_path
     from portfolio_attention.lightning.module import PortfolioLightningModule as _BasePortfolioLightningModule
     from portfolio_attention.lightning.validation import (
         ScenarioRollingValidationMetric,
@@ -98,6 +99,7 @@ else:
         RoundedCSVLogger,
         RoundedMetricsExperimentWriter,
     )
+    from .gradient_diagnostics import gradient_diagnostics_path
     from .module import PortfolioLightningModule as _BasePortfolioLightningModule
     from .validation import (
         ScenarioRollingValidationMetric,
@@ -332,6 +334,11 @@ def _build_single_state_training_stack(
         stock_count_weight_threshold=float(evaluation_config.stock_count_weight_threshold),
         stock_count_min_active_days=int(evaluation_config.stock_count_min_active_days),
         evaluation_transaction_cost_rate=float(evaluation_config.evaluation_transaction_cost_rate),
+        gradient_diagnostics_path=gradient_diagnostics_path(
+            outputs_dir=paths.outputs_dir,
+            state=data_config.state,
+            loss_name=train_config.loss_name,
+        ),
     )
 
     checkpoint_callback = ModelCheckpoint(

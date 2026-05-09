@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytorch_lightning as pl
@@ -17,6 +18,10 @@ from ..evaluation.metrics import (
 from ..evaluation.runtime import _collect_single_scenario_rolling_one_step_outputs
 from ..model.losses import build_loss
 from ..training.engine import _run_loss_step, build_training_model
+from .gradient_diagnostics import (
+    GradientDiagnosticsCSVWriter,
+    compute_gradient_diagnostics,
+)
 from .validation import ScenarioRollingValidationMetric, compute_validation_window_objective_loss
 
 
@@ -33,6 +38,7 @@ class PortfolioLightningModule(pl.LightningModule):
         stock_count_weight_threshold: float,
         stock_count_min_active_days: int,
         evaluation_transaction_cost_rate: float = 0.0,
+        gradient_diagnostics_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.data_config = data_config
@@ -42,6 +48,12 @@ class PortfolioLightningModule(pl.LightningModule):
         self.stock_count_weight_threshold = float(stock_count_weight_threshold)
         self.stock_count_min_active_days = int(stock_count_min_active_days)
         self.evaluation_transaction_cost_rate = float(evaluation_transaction_cost_rate)
+        self.gradient_diagnostics_writer = (
+            GradientDiagnosticsCSVWriter(Path(gradient_diagnostics_path))
+            if gradient_diagnostics_path is not None
+            else None
+        )
+        self._latest_train_diagnostics: dict[str, Any] = {}
 
         self.model = build_training_model(
             model_config=model_config,
@@ -66,7 +78,6 @@ class PortfolioLightningModule(pl.LightningModule):
         )
 
     def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
-        del batch_idx
         loss, _, summary = _run_loss_step(
             self.model,
             batch,
@@ -79,6 +90,11 @@ class PortfolioLightningModule(pl.LightningModule):
         train_weight_loss = summary.get("weight_loss", loss.new_zeros(()))
         train_ot = summary.get("mean_turnover", loss.new_zeros(()))
         batch_size = int(summary["scenario_final_returns"].numel())
+        self._latest_train_diagnostics = self._build_train_diagnostics(
+            loss=loss,
+            summary=summary,
+            batch_idx=batch_idx,
+        )
 
         self._log_train_epoch_metric("train_loss", loss, prog_bar=True, batch_size=batch_size)
         self._log_train_epoch_metric(
@@ -100,6 +116,37 @@ class PortfolioLightningModule(pl.LightningModule):
             batch_size=batch_size,
         )
         return loss
+
+    def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
+        del optimizer
+        diagnostics = compute_gradient_diagnostics(self.model.named_parameters())
+        row = {
+            "event": "gradient",
+            "epoch": int(self.current_epoch),
+            "global_step": int(self.global_step),
+            **self._latest_train_diagnostics,
+            "grad_norm": diagnostics.grad_norm,
+            "grad_abs_max": diagnostics.grad_abs_max,
+            "grad_nonfinite_count": diagnostics.grad_nonfinite_count,
+            "first_nonfinite_param": diagnostics.first_nonfinite_param,
+        }
+
+        if diagnostics.grad_nonfinite_count > 0:
+            row["event"] = "nonfinite_gradient"
+            self._write_gradient_diagnostics(row)
+            if bool(self.train_config.grad_monitor_fail_fast):
+                raise FloatingPointError(
+                    "Non-finite gradient detected before optimizer step: "
+                    f"global_step={int(self.global_step)} "
+                    f"epoch={int(self.current_epoch)} "
+                    f"first_nonfinite_param={diagnostics.first_nonfinite_param!r} "
+                    f"grad_nonfinite_count={diagnostics.grad_nonfinite_count}."
+                )
+            return
+
+        interval = int(self.train_config.grad_monitor_interval_steps)
+        if interval > 0 and int(self.global_step) % interval == 0:
+            self._write_gradient_diagnostics(row)
 
     def on_validation_epoch_start(self) -> None:
         self.val_metric.reset()
@@ -216,6 +263,55 @@ class PortfolioLightningModule(pl.LightningModule):
             logger=True,
             sync_dist=False,
         )
+
+    def _build_train_diagnostics(
+        self,
+        *,
+        loss: torch.Tensor,
+        summary: dict[str, torch.Tensor],
+        batch_idx: int,
+    ) -> dict[str, Any]:
+        keys = (
+            "return_mean_min",
+            "return_mean_max",
+            "return_std_min",
+            "return_std_max",
+            "allocation_logits_abs_max",
+            "raw_allocation_min",
+            "raw_allocation_max",
+            "dirichlet_alpha_min",
+            "dirichlet_alpha_max",
+            "dirichlet_alpha_mean",
+            "dirichlet_alpha_sum_mean",
+        )
+        diagnostics: dict[str, Any] = {
+            "batch_idx": int(batch_idx),
+            "train_loss": self._to_diagnostic_value(loss),
+        }
+        for key in keys:
+            diagnostics[key] = self._to_diagnostic_value(summary.get(key))
+        return diagnostics
+
+    def _write_gradient_diagnostics(self, row: dict[str, Any]) -> None:
+        if self.gradient_diagnostics_writer is None:
+            return
+        try:
+            trainer = self.trainer
+        except RuntimeError:
+            trainer = None
+        if trainer is not None and not bool(getattr(trainer, "is_global_zero", True)):
+            return
+        self.gradient_diagnostics_writer.write_row(row)
+
+    @staticmethod
+    def _to_diagnostic_value(value: Any) -> float | str:
+        if value is None:
+            return ""
+        if isinstance(value, torch.Tensor):
+            return float(value.detach().cpu().item())
+        if isinstance(value, (int, float)):
+            return float(value)
+        return str(value)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         return torch.optim.Adam(

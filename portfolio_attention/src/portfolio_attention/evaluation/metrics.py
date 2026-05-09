@@ -11,6 +11,7 @@ def apply_transaction_cost_to_returns(
     *,
     transaction_cost_rate: float,
 ) -> torch.Tensor:
+    """Apply self-financing transaction costs before the period return is earned."""
     if portfolio_returns.shape != turnover.shape:
         raise ValueError(
             "portfolio_returns and turnover must have the same shape when applying transaction costs. "
@@ -24,7 +25,8 @@ def apply_transaction_cost_to_returns(
         )
     if resolved_transaction_cost_rate == 0.0:
         return portfolio_returns
-    return portfolio_returns - resolved_transaction_cost_rate * turnover
+    cost_fraction = resolved_transaction_cost_rate * turnover
+    return (1.0 - cost_fraction) * (1.0 + portfolio_returns) - 1.0
 
 
 def compute_selected_stock_count_from_weights(

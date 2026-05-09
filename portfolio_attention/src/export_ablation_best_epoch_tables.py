@@ -56,11 +56,13 @@ REGIME_TABLE_FIELDS = [
 @dataclass(frozen=True)
 class ExperimentConfig:
     sample_num_stocks: int | None
+    train_batch_size: int | None
     detach_prev_weight: bool | None
     use_prev_weight_feature: bool | None
     turnover_penalty: float | None
     transaction_cost_rate: float | None
     rolling_stride_days: int | None
+    learning_rate: float | None
 
     @property
     def detach_label(self) -> str:
@@ -101,7 +103,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--output-root",
         type=Path,
         default=DEFAULT_OUTPUT_ROOT,
-        help="Root directory containing predictions_s* experiment directories.",
+        help=(
+            "Root directory containing predictions_s* experiment directories, "
+            "or one predictions_s* experiment directory."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -150,17 +155,19 @@ def _load_runtime_config(experiment_dir: Path) -> dict[str, Any] | None:
 def _experiment_config(experiment_dir: Path) -> ExperimentConfig:
     payload = _load_runtime_config(experiment_dir)
     if payload is None:
-        return ExperimentConfig(None, None, None, None, None, None)
+        return ExperimentConfig(None, None, None, None, None, None, None, None)
     data = payload.get("data_config", {})
     model = payload.get("model_config", {})
     train = payload.get("train_config", {})
     return ExperimentConfig(
         sample_num_stocks=_to_optional_int(data.get("sample_num_stocks")),
+        train_batch_size=_to_optional_int(data.get("train_batch_size")),
         detach_prev_weight=_to_optional_bool(model.get("detach_prev_weight")),
         use_prev_weight_feature=_to_optional_bool(model.get("use_prev_weight_feature")),
         turnover_penalty=_to_optional_float(train.get("turnover_penalty")),
         transaction_cost_rate=_to_optional_float(train.get("transaction_cost_rate")),
         rolling_stride_days=_to_optional_int(data.get("rolling_stride_days")),
+        learning_rate=_to_optional_float(train.get("learning_rate")),
     )
 
 
@@ -195,6 +202,24 @@ def _complete_epoch_count(state_dir: Path) -> int:
         if all((epoch_dir / f"{loss}_monitoring_holdout_backtest.json").is_file() for loss in LOSS_NAMES):
             count += 1
     return count
+
+
+def _is_prediction_experiment_dir(path: Path) -> bool:
+    return (
+        path.is_dir()
+        and path.name.startswith("predictions_s")
+        and any((path / state).is_dir() for state in STATE_NAMES)
+    )
+
+
+def _prediction_experiment_dirs(output_root: Path) -> list[Path]:
+    if _is_prediction_experiment_dir(output_root):
+        return [output_root]
+    return [
+        path
+        for path in output_root.glob("predictions_s*")
+        if _is_prediction_experiment_dir(path)
+    ]
 
 
 def _state_metrics(best_payload: dict[str, Any], *, context: str) -> dict[str, Any]:
@@ -235,8 +260,7 @@ def _sort_key(item: tuple[Path, ExperimentConfig]) -> tuple[Any, ...]:
 def _collect_rows(output_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     experiments = [
         (path, _experiment_config(path))
-        for path in output_root.glob("predictions_s*")
-        if path.is_dir()
+        for path in _prediction_experiment_dirs(output_root)
     ]
     experiments.sort(key=_sort_key)
 
@@ -328,6 +352,10 @@ def _variant_and_feedback(config: ExperimentConfig) -> tuple[str, str]:
             return "No prev-weight feedback + penalty", "None"
     if sample == 1500 and use_prev_weight is True and detach is False and penalty == 5000.0:
         return "Larger universe", "End-to-end"
+    if sample == 200 and use_prev_weight is True and detach is False and penalty == 5000.0:
+        if config.train_batch_size == 30:
+            return "Small sample + larger batch", "End-to-end"
+        return "Small sample", "End-to-end"
     return config.label, config.detach_label
 
 
@@ -372,6 +400,8 @@ def _regime_table_sort_key(row: dict[str, Any]) -> int:
         "No prev-weight feedback": 4,
         "No prev-weight feedback + penalty": 5,
         "Larger universe": 6,
+        "Small sample": 7,
+        "Small sample + larger batch": 8,
     }
     return order.get(str(row.get("Variant")), 10**9)
 

@@ -352,6 +352,19 @@ def validate_train_config(config: TrainConfig) -> None:
             f"received {config.enable_fixed_epoch_holdout_backtests!r}."
         )
 
+    config.grad_monitor_interval_steps = int(config.grad_monitor_interval_steps)
+    if config.grad_monitor_interval_steps < 0:
+        raise ValueError(
+            "TrainConfig.grad_monitor_interval_steps must be non-negative, "
+            f"received {config.grad_monitor_interval_steps}."
+        )
+
+    if not isinstance(config.grad_monitor_fail_fast, bool):
+        raise ValueError(
+            "TrainConfig.grad_monitor_fail_fast must be a bool, "
+            f"received {config.grad_monitor_fail_fast!r}."
+        )
+
     config.turnover_penalty = float(config.turnover_penalty)
     if config.turnover_penalty < 0.0:
         raise ValueError(

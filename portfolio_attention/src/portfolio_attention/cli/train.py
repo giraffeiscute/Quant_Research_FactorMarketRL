@@ -192,6 +192,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--transaction-cost-rate", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--grad-clip-norm", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--grad-monitor-interval-steps", type=int, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--disable-grad-monitor-fail-fast",
+        action="store_true",
+        default=argparse.SUPPRESS,
+    )
     parser.add_argument("--early-stopping-patience", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--resume-from", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--resume-checkpoints", type=str, default=argparse.SUPPRESS)
@@ -283,6 +289,12 @@ def resolve_runtime_configs_from_args(
         train_overrides["transaction_cost_rate"] = args_dict["transaction_cost_rate"]
     if "grad_clip_norm" in args_dict:
         train_overrides["grad_clip_norm"] = args_dict["grad_clip_norm"]
+    if "grad_monitor_interval_steps" in args_dict:
+        train_overrides["grad_monitor_interval_steps"] = args_dict["grad_monitor_interval_steps"]
+    if "disable_grad_monitor_fail_fast" in args_dict:
+        train_overrides["grad_monitor_fail_fast"] = not bool(
+            args_dict["disable_grad_monitor_fail_fast"]
+        )
     if "early_stopping_patience" in args_dict:
         train_overrides["early_stopping_patience"] = args_dict["early_stopping_patience"]
     if "resume_from" in args_dict:

@@ -463,6 +463,7 @@ class PortfolioAttentionModel(nn.Module):
             "allocation_logits": allocation_logits,
             "raw_allocation": raw_allocation,
             "allocation": allocation,
+            "allocation_alpha": allocation_alpha,
             "initial_allocation": initial_allocation,
             "previous_allocation": previous_allocation,
             "turnover": turnover,
