@@ -1,8 +1,5 @@
 ﻿# FactorMarketRL
 
-> [!NOTE]
-> 本 README 為繁體中文版本。專案目前以 synthetic factor market、portfolio optimization 與 attention-based portfolio model 為主；名稱雖包含 RL，但目前不是完整的 agent-environment reinforcement learning pipeline。
-
 <a name="繁體中文"></a>
 ## 專案簡介 (Introduction)
 
