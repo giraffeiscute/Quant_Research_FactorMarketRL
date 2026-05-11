@@ -181,50 +181,6 @@ def sharpe_loss(
     return scenario_losses.mean()
 
 
-# 依序更新 A/B 統計量來計算 Differential Sharpe Ratio 損失。
-def differential_sharpe_loss(
-    portfolio_returns: torch.Tensor,
-    eta: float = 0.2,
-    A0: float = 0.0,
-    B0: float = 1e-4,
-    eps: float = 1e-8,
-    reduction: Literal["mean", "sum", "last"] = "mean",
-) -> torch.Tensor:
-    """計算整段投資組合報酬的負 Differential Sharpe Ratio 損失。"""
-    portfolio_returns = _coerce_portfolio_returns(portfolio_returns)
-
-    batch_size, T = portfolio_returns.shape
-    device = portfolio_returns.device  # 保持中間張量與輸入在同一裝置
-
-    A = torch.full((batch_size,), A0, device=device)  # 一階動差的初始估計
-    B = torch.full((batch_size,), B0, device=device)  # 二階動差的初始估計
-    scores = []
-
-    for t in range(T):
-        Rt = portfolio_returns[:, t]  # 取出第 t 個時間步的報酬
-        delta_A = Rt - A  # 當前報酬對均值估計的偏差
-        delta_B = Rt**2 - B  # 當前平方報酬對二階動差估計的偏差
-
-        numerator = B * delta_A - 0.5 * A * delta_B  # DSR 分子
-        denominator = (B - A**2 + eps) ** 1.5  # DSR 分母
-        Dt = numerator / (denominator + eps)  # 單步 Differential Sharpe 分數
-        scores.append(Dt)
-
-        A = A + eta * delta_A  # 更新一階動差估計
-        B = B + eta * delta_B  # 更新二階動差估計
-
-    all_scores = torch.stack(scores, dim=1)  # [B, T]，收集所有時間步分數
-
-    if reduction == "last":
-        score = all_scores[:, -1]  # 只取最後一步
-    elif reduction == "sum":
-        score = all_scores.sum(dim=1)  # 對時間維度加總
-    else:
-        score = all_scores.mean(dim=1)  # 對時間維度取平均
-
-    return -score.mean()  # 取負號轉成可最小化的損失
-
-
 # 計算 Sortino Ratio 損失，只懲罰低於目標報酬的下行波動。
 def sortino_loss(
     portfolio_returns: torch.Tensor,
@@ -309,9 +265,6 @@ def build_loss(
 
     if normalized in {"sharpe", "sr"}:
         return sharpe_loss(portfolio_returns, **kwargs)  # Sharpe 類別名
-
-    if normalized in {"dsr", "differentialsharpe"}:
-        return differential_sharpe_loss(portfolio_returns, **kwargs)  # DSR 類別名
 
     if normalized == "sortino":
         return sortino_loss(portfolio_returns, **kwargs)  # Sortino

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from dataclasses import fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .paths import default_scenario_dir
+from .schema import RLTrainingConfig
 
 if TYPE_CHECKING:
     from .schema import DataConfig, EvaluationConfig, ModelConfig, TrainConfig
@@ -48,10 +50,6 @@ def normalize_model_config_dict(config_dict: dict[str, Any]) -> dict[str, Any]:
         normalized["initial_allocation_mode"] = "equal_weight"
     if "initial_random_concentration" not in normalized:
         normalized["initial_random_concentration"] = 1.0
-    if "allocation_distribution_type" not in normalized:
-        normalized["allocation_distribution_type"] = "softmax"
-    if "dirichlet_alpha_offset" not in normalized:
-        normalized["dirichlet_alpha_offset"] = 0.1
     if "detach_prev_weight" not in normalized:
         normalized["detach_prev_weight"] = False
     if "use_prev_weight_feature" not in normalized:
@@ -96,6 +94,20 @@ def validated_train_config(config: TrainConfig) -> TrainConfig:
     resolved = replace(config)
     validate_train_config(resolved)
     return resolved
+
+
+def validate_train_config_against_data_config(
+    train_config: TrainConfig,
+    data_config: DataConfig,
+) -> None:
+    if not bool(train_config.rl_training.enabled):
+        return
+    rolling_horizon_days = int(data_config.rolling_horizon_days)
+    if rolling_horizon_days < 2:
+        raise ValueError(
+            "DataConfig.rolling_horizon_days must be >= 2 when TrainConfig.rl_training.enabled is True, "
+            f"received {rolling_horizon_days}."
+        )
 
 
 def validated_evaluation_config(config: EvaluationConfig) -> EvaluationConfig:
@@ -305,22 +317,6 @@ def validate_model_config(config: ModelConfig) -> None:
             f"received {config.initial_random_concentration}."
         )
 
-    config.allocation_distribution_type = str(config.allocation_distribution_type).strip().lower()
-    valid_allocation_distribution_types = {"softmax", "dirichlet"}
-    if config.allocation_distribution_type not in valid_allocation_distribution_types:
-        raise ValueError(
-            "ModelConfig.allocation_distribution_type must be one of "
-            f"{sorted(valid_allocation_distribution_types)}, "
-            f"received {config.allocation_distribution_type!r}."
-        )
-
-    config.dirichlet_alpha_offset = float(config.dirichlet_alpha_offset)
-    if config.dirichlet_alpha_offset <= 0.0:
-        raise ValueError(
-            "ModelConfig.dirichlet_alpha_offset must be > 0.0, "
-            f"received {config.dirichlet_alpha_offset}."
-        )
-
     if not isinstance(config.detach_prev_weight, bool):
         raise ValueError(
             "ModelConfig.detach_prev_weight must be a bool, "
@@ -390,6 +386,114 @@ def validate_train_config(config: TrainConfig) -> None:
 
     if config.resume_from is not None:
         config.resume_from = Path(config.resume_from)
+    config.rl_training = _validated_rl_training_config(config.rl_training)
+
+
+def _validated_rl_training_config(value: object) -> RLTrainingConfig:
+    if isinstance(value, RLTrainingConfig):
+        config = replace(value)
+    elif isinstance(value, dict):
+        legal_keys = {field_info.name for field_info in fields(RLTrainingConfig)}
+        unknown_keys = sorted(str(key) for key in value.keys() if key not in legal_keys)
+        if unknown_keys:
+            raise ValueError(
+                "TrainConfig.rl_training contains unknown keys "
+                f"{unknown_keys}. Legal keys: {sorted(legal_keys)}."
+            )
+        config = RLTrainingConfig(**value)
+    else:
+        raise ValueError(
+            "TrainConfig.rl_training must be an RLTrainingConfig or mapping, "
+            f"received {type(value).__name__}."
+        )
+
+    if not isinstance(config.enabled, bool):
+        raise ValueError(
+            "TrainConfig.rl_training.enabled must be a bool, "
+            f"received {config.enabled!r}."
+        )
+    config.algorithm = str(config.algorithm).strip().lower()  # type: ignore[assignment]
+    if config.algorithm != "grpo_like":
+        raise ValueError(
+            "TrainConfig.rl_training.algorithm must be 'grpo_like', "
+            f"received {config.algorithm!r}."
+        )
+
+    config.reward_type = str(config.reward_type).strip().lower()  # type: ignore[assignment]
+    if config.reward_type != "dsr_day_last":
+        raise ValueError(
+            "TrainConfig.rl_training.reward_type must be 'dsr_day_last', "
+            f"received {config.reward_type!r}."
+        )
+
+    config.warmup_allocation_mode = str(config.warmup_allocation_mode).strip().lower()  # type: ignore[assignment]
+    if config.warmup_allocation_mode != "deterministic_mean":
+        raise ValueError(
+            "TrainConfig.rl_training.warmup_allocation_mode must be 'deterministic_mean', "
+            f"received {config.warmup_allocation_mode!r}."
+        )
+
+    config.group_size = int(config.group_size)
+    if config.group_size <= 0:
+        raise ValueError(
+            "TrainConfig.rl_training.group_size must be positive, "
+            f"received {config.group_size}."
+        )
+
+    config.dsr_eta = float(config.dsr_eta)
+    if config.dsr_eta <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.dsr_eta must be > 0, "
+            f"received {config.dsr_eta}."
+        )
+
+    config.dsr_var_eps = float(config.dsr_var_eps)
+    if config.dsr_var_eps <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.dsr_var_eps must be > 0, "
+            f"received {config.dsr_var_eps}."
+        )
+
+    config.reward_clip = float(config.reward_clip)
+    if config.reward_clip <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.reward_clip must be > 0, "
+            f"received {config.reward_clip}."
+        )
+
+    config.entropy_coef = float(config.entropy_coef)
+    if config.entropy_coef < 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.entropy_coef must be non-negative, "
+            f"received {config.entropy_coef}."
+        )
+
+    config.alpha_min = float(config.alpha_min)
+    config.alpha_max = float(config.alpha_max)
+    if config.alpha_min <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.alpha_min must be > 0, "
+            f"received {config.alpha_min}."
+        )
+    if config.alpha_max <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.alpha_max must be > 0, "
+            f"received {config.alpha_max}."
+        )
+    if config.alpha_min > config.alpha_max:
+        raise ValueError(
+            "TrainConfig.rl_training.alpha_min must be <= alpha_max, "
+            f"received alpha_min={config.alpha_min} alpha_max={config.alpha_max}."
+        )
+
+    config.grad_clip_norm = float(config.grad_clip_norm)
+    if config.grad_clip_norm <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.grad_clip_norm must be > 0, "
+            f"received {config.grad_clip_norm}."
+        )
+
+    return config
 
 
 def validate_evaluation_config(config: EvaluationConfig) -> None:

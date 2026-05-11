@@ -249,7 +249,6 @@ def _run_loss_step(
     scored_return_std = net_scored_returns.std(dim=1, unbiased=True)
     allocation_logits = outputs.get("allocation_logits")
     raw_allocation = outputs.get("raw_allocation")
-    allocation_alpha = outputs.get("allocation_alpha")
     if not isinstance(allocation_logits, torch.Tensor):
         raise RuntimeError("Training batch requires model outputs to include allocation_logits tensor.")
     if not isinstance(raw_allocation, torch.Tensor):
@@ -268,17 +267,6 @@ def _run_loss_step(
         "raw_allocation_min": raw_allocation.detach().min(),
         "raw_allocation_max": raw_allocation.detach().max(),
     }
-    if isinstance(allocation_alpha, torch.Tensor):
-        alpha_detached = allocation_alpha.detach()
-        alpha_sum = alpha_detached.sum(dim=-1)
-        summary.update(
-            {
-                "dirichlet_alpha_min": alpha_detached.min(),
-                "dirichlet_alpha_max": alpha_detached.max(),
-                "dirichlet_alpha_mean": alpha_detached.mean(),
-                "dirichlet_alpha_sum_mean": alpha_sum.mean(),
-            }
-        )
     return loss, net_scored_returns, summary
 
 

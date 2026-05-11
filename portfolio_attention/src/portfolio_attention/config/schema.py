@@ -91,7 +91,7 @@ class DataConfig:
     price_normalization_mode: Literal["none", "relative_to_anchor"] = "relative_to_anchor"
 
     # Number of stocks sampled per training rolling window.
-    sample_num_stocks: int = 1000
+    sample_num_stocks: int = 400
 
     @property
     def resolved_scenario_dir(self) -> Path:
@@ -134,9 +134,7 @@ class ModelConfig:
     time_positional_encoding_type: Literal["none", "sinusoidal"] = "sinusoidal"
     allocation_smoothing_alpha: float = 0.9
     initial_allocation_mode: Literal["equal_weight", "random_dirichlet"] = "random_dirichlet"
-    initial_random_concentration: float = 5
-    allocation_distribution_type: Literal["softmax", "dirichlet"] = "softmax"
-    dirichlet_alpha_offset: float = 0.5
+    initial_random_concentration: float = 1
     detach_prev_weight: bool = False
     use_prev_weight_feature: bool = True
 
@@ -149,7 +147,7 @@ class TrainConfig:
     """Training settings for scenario-mode optimization."""
 
     seed: int = 42
-    learning_rate: float = 3e-4
+    learning_rate: float = 1e-4
     num_epochs: int = 150
     weight_decay: float = 3e-4
     grad_clip_norm: float = 1.0
@@ -162,9 +160,10 @@ class TrainConfig:
     turnover_penalty: float = 5000
     turnover_penalty_norm: Literal["l1", "l2"] = "l2"
     transaction_cost_rate: float = 0
-    loss_name: Literal["", "return", "sharpe", "dsr", "sortino", "mdd", "cvar"] = ""
+    loss_name: Literal["", "return", "sharpe", "sortino", "mdd", "cvar"] = ""
     device: str = "cuda"
     resume_from: Path | None = None
+    rl_training: "RLTrainingConfig" = field(default_factory=lambda: RLTrainingConfig())
     def _checkpoint_name(self, stem: str, state: str | None = None) -> str:
         prefix = f"{state}_" if state else ""
         if self.loss_name:
@@ -194,6 +193,32 @@ class EvaluationConfig:
     stock_count_weight_threshold: float = 0.001
     stock_count_min_active_days: int = 2
     evaluation_transaction_cost_rate: float = 0.001
+
+
+@dataclass
+class RLTrainingConfig:
+    """RL-specific training knobs (disabled by default)."""
+
+    enabled: bool = False
+    algorithm: Literal["grpo_like"] = "grpo_like"
+    reward_type: Literal["dsr_day_last"] = "dsr_day_last"
+    group_size: int = 4
+    warmup_allocation_mode: Literal["deterministic_mean"] = "deterministic_mean"
+    dsr_eta: float = 0.01
+    dsr_var_eps: float = 1e-8
+    reward_clip: float = 5.0
+    entropy_coef: float = 0.001
+    alpha_min: float = 0.05
+    alpha_max: float = 50.0
+    grad_clip_norm: float = 1.0
+
+    @staticmethod
+    def warmup_days_for_horizon(rolling_horizon_days: int) -> int:
+        return int(rolling_horizon_days) - 1
+
+    @staticmethod
+    def reward_day_for_horizon(rolling_horizon_days: int) -> int:
+        return int(rolling_horizon_days)
 
 
 # Backward-compatible re-export for legacy script imports.

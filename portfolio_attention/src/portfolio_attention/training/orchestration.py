@@ -20,6 +20,7 @@ from ..common.utils import (
 )
 from ..config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
 from ..config.validation import (
+    validate_train_config_against_data_config,
     validated_data_config,
     validated_model_config,
     validated_train_config,
@@ -455,6 +456,7 @@ def run_epoch_training(
     data_config = validated_data_config(data_config)
     model_config = validated_model_config(model_config)
     train_config = validated_train_config(train_config)
+    validate_train_config_against_data_config(train_config, data_config)
     ensure_output_dirs(paths)
     save_runtime_config_artifact(
         paths=paths,

@@ -28,7 +28,7 @@ def _resolve_checkpoint_path(
 ) -> Path:
     return checkpoint_path or artifact_paths.train_best_checkpoint_path(
         paths,
-        loss_name or "dsr",
+        loss_name or "sharpe",
         state=_resolve_checkpoint_state(data_config),
     )
 

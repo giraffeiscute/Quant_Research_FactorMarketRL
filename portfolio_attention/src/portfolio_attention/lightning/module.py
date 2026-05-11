@@ -9,6 +9,7 @@ import pytorch_lightning as pl
 import torch
 
 from ..config import DataConfig, ModelConfig, TrainConfig
+from ..config.validation import validated_train_config
 from ..data.dataset import PortfolioPanelDataset
 from ..evaluation.metrics import (
     apply_transaction_cost_to_returns,
@@ -18,6 +19,7 @@ from ..evaluation.metrics import (
 from ..evaluation.runtime import _collect_single_scenario_rolling_one_step_outputs
 from ..model.losses import build_loss
 from ..training.engine import _run_loss_step, build_training_model
+from ..training.rl_engine import run_rl_policy_step
 from .gradient_diagnostics import (
     GradientDiagnosticsCSVWriter,
     compute_gradient_diagnostics,
@@ -43,7 +45,7 @@ class PortfolioLightningModule(pl.LightningModule):
         super().__init__()
         self.data_config = data_config
         self.model_config = model_config
-        self.train_config = train_config
+        self.train_config = validated_train_config(train_config)
         self.dataset = dataset
         self.stock_count_weight_threshold = float(stock_count_weight_threshold)
         self.stock_count_min_active_days = int(stock_count_min_active_days)
@@ -78,6 +80,9 @@ class PortfolioLightningModule(pl.LightningModule):
         )
 
     def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
+        if bool(self.train_config.rl_training.enabled):
+            return self._training_step_rl(batch, batch_idx)
+
         loss, _, summary = _run_loss_step(
             self.model,
             batch,
@@ -116,6 +121,27 @@ class PortfolioLightningModule(pl.LightningModule):
             batch_size=batch_size,
         )
         return loss
+
+    def _training_step_rl(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
+        result = run_rl_policy_step(
+            self.model,
+            batch,
+            data_config=self.data_config,
+            train_config=self.train_config,
+        )
+        self._latest_train_diagnostics = self._build_train_diagnostics(
+            loss=result.policy_loss,
+            summary=result.summary,
+            batch_idx=batch_idx,
+        )
+        for metric_name, metric_value in result.metrics.items():
+            self._log_train_epoch_metric(
+                metric_name,
+                metric_value,
+                prog_bar=(metric_name == "train_policy_loss"),
+                batch_size=result.batch_size,
+            )
+        return result.policy_loss
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
         del optimizer
@@ -279,10 +305,6 @@ class PortfolioLightningModule(pl.LightningModule):
             "allocation_logits_abs_max",
             "raw_allocation_min",
             "raw_allocation_max",
-            "dirichlet_alpha_min",
-            "dirichlet_alpha_max",
-            "dirichlet_alpha_mean",
-            "dirichlet_alpha_sum_mean",
         )
         diagnostics: dict[str, Any] = {
             "batch_idx": int(batch_idx),

@@ -1,0 +1,237 @@
+"""Reward utilities for reinforcement-learning style portfolio training."""
+
+from __future__ import annotations
+
+from typing import Literal
+
+import torch
+
+
+def _coerce_portfolio_returns(portfolio_returns: torch.Tensor) -> torch.Tensor:
+    if portfolio_returns.numel() == 0:
+        raise ValueError("portfolio_returns must not be empty.")
+    if portfolio_returns.ndim == 1:
+        return portfolio_returns.unsqueeze(0)
+    if portfolio_returns.ndim != 2:
+        raise ValueError(
+            "portfolio_returns must have shape [num_scenarios_in_batch, time_steps]. "
+            f"Received {tuple(portfolio_returns.shape)}."
+        )
+    return portfolio_returns
+
+
+def differential_sharpe_loss(
+    portfolio_returns: torch.Tensor,
+    eta: float = 0.2,
+    A0: float = 0.0,
+    B0: float = 1e-4,
+    eps: float = 1e-8,
+    reduction: Literal["mean", "sum", "last"] = "mean",
+) -> torch.Tensor:
+    """Compute negative Differential Sharpe Ratio loss over each scenario path."""
+    portfolio_returns = _coerce_portfolio_returns(portfolio_returns)
+
+    batch_size, time_steps = portfolio_returns.shape
+    device = portfolio_returns.device
+
+    A = torch.full((batch_size,), A0, device=device)
+    B = torch.full((batch_size,), B0, device=device)
+    scores = []
+
+    for t in range(time_steps):
+        Rt = portfolio_returns[:, t]
+        delta_A = Rt - A
+        delta_B = Rt**2 - B
+
+        numerator = B * delta_A - 0.5 * A * delta_B
+        denominator = (B - A**2 + eps) ** 1.5
+        score_t = numerator / (denominator + eps)
+        scores.append(score_t)
+
+        A = A + eta * delta_A
+        B = B + eta * delta_B
+
+    all_scores = torch.stack(scores, dim=1)
+
+    if reduction == "last":
+        score = all_scores[:, -1]
+    elif reduction == "sum":
+        score = all_scores.sum(dim=1)
+    else:
+        score = all_scores.mean(dim=1)
+
+    return -score.mean()
+
+
+def compute_differential_sharpe_scores(
+    portfolio_returns: torch.Tensor,
+    *,
+    eta: float = 0.2,
+    A0: float | torch.Tensor = 0.0,
+    B0: float | torch.Tensor = 1e-4,
+    dsr_var_eps: float = 1e-8,
+    reward_clip: float | None = None,
+) -> torch.Tensor:
+    """Return per-step Differential Sharpe scores with positive reward sign."""
+    scored_returns = _coerce_portfolio_returns(portfolio_returns)
+    batch_size, time_steps = scored_returns.shape
+
+    if float(dsr_var_eps) <= 0.0:
+        raise ValueError(f"dsr_var_eps must be > 0, received {dsr_var_eps}.")
+
+    def _expand_stat(value: float | torch.Tensor, name: str) -> torch.Tensor:
+        if isinstance(value, torch.Tensor):
+            tensor_value = value.to(device=scored_returns.device, dtype=scored_returns.dtype)
+            if tensor_value.ndim == 0:
+                return tensor_value.expand(batch_size)
+            if tensor_value.ndim == 1 and int(tensor_value.shape[0]) == batch_size:
+                return tensor_value
+            raise ValueError(
+                f"{name} tensor must be scalar or shape [batch_size={batch_size}], "
+                f"received {tuple(tensor_value.shape)}."
+            )
+        return torch.full(
+            (batch_size,),
+            float(value),
+            device=scored_returns.device,
+            dtype=scored_returns.dtype,
+        )
+
+    A = _expand_stat(A0, "A0")
+    B = _expand_stat(B0, "B0")
+    eta_value = float(eta)
+    scores: list[torch.Tensor] = []
+
+    for time_index in range(time_steps):
+        Rt = scored_returns[:, time_index]
+        delta_A = Rt - A
+        delta_B = Rt.pow(2) - B
+        var_prev = torch.clamp(B - A.pow(2), min=float(dsr_var_eps))
+        numerator = B * delta_A - 0.5 * A * delta_B
+        denominator = var_prev.pow(1.5) + float(dsr_var_eps)
+        score_t = numerator / denominator
+        if reward_clip is not None:
+            clip_value = float(reward_clip)
+            if clip_value <= 0.0:
+                raise ValueError(f"reward_clip must be > 0 when set, received {reward_clip}.")
+            score_t = torch.clamp(score_t, min=-clip_value, max=clip_value)
+        scores.append(score_t)
+        A = A + eta_value * delta_A
+        B = B + eta_value * delta_B
+
+    return torch.stack(scores, dim=1)
+
+
+def compute_dsr_warmup_stats(
+    prediction_returns: torch.Tensor,
+    *,
+    rolling_horizon_days: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Use first H-1 horizon returns to initialize A0/B0, where H=rolling_horizon_days."""
+    scored_returns = _coerce_portfolio_returns(prediction_returns)
+    horizon_days = int(rolling_horizon_days)
+    if horizon_days < 2:
+        raise ValueError(
+            "rolling_horizon_days must be >= 2 to compute DSR warmup stats, "
+            f"received {horizon_days}."
+        )
+    if int(scored_returns.shape[1]) != horizon_days:
+        raise ValueError(
+            "prediction_returns must have shape [batch, rolling_horizon_days]. "
+            f"Received {tuple(scored_returns.shape)} with rolling_horizon_days={horizon_days}."
+        )
+    warmup_returns = scored_returns[:, : horizon_days - 1]
+    return warmup_returns.mean(dim=1), warmup_returns.pow(2).mean(dim=1)
+
+
+def compute_dsr_day_reward(
+    prediction_returns: torch.Tensor,
+    *,
+    rolling_horizon_days: int,
+    A0: torch.Tensor | None = None,
+    B0: torch.Tensor | None = None,
+    dsr_var_eps: float = 1e-8,
+    reward_clip: float | None = 5.0,
+) -> torch.Tensor:
+    """Compute DSR reward for final horizon day (index H-1), warmup from 0..H-2."""
+    scored_returns = _coerce_portfolio_returns(prediction_returns)
+    horizon_days = int(rolling_horizon_days)
+    if horizon_days < 2:
+        raise ValueError(
+            "rolling_horizon_days must be >= 2 to compute a final-day DSR reward, "
+            f"received {horizon_days}."
+        )
+    if int(scored_returns.shape[1]) != horizon_days:
+        raise ValueError(
+            "prediction_returns must have shape [batch, rolling_horizon_days]. "
+            f"Received {tuple(scored_returns.shape)} with rolling_horizon_days={horizon_days}."
+        )
+
+    warmup_A0, warmup_B0 = compute_dsr_warmup_stats(
+        scored_returns,
+        rolling_horizon_days=horizon_days,
+    )
+    A_prev = warmup_A0 if A0 is None else A0.to(device=scored_returns.device, dtype=scored_returns.dtype)
+    B_prev = warmup_B0 if B0 is None else B0.to(device=scored_returns.device, dtype=scored_returns.dtype)
+    if A_prev.ndim == 0:
+        A_prev = A_prev.expand(scored_returns.shape[0])
+    if B_prev.ndim == 0:
+        B_prev = B_prev.expand(scored_returns.shape[0])
+    if tuple(A_prev.shape) != (scored_returns.shape[0],):
+        raise ValueError(
+            "A0 must be scalar or shape [batch_size]. "
+            f"Received {tuple(A_prev.shape)} for batch_size={scored_returns.shape[0]}."
+        )
+    if tuple(B_prev.shape) != (scored_returns.shape[0],):
+        raise ValueError(
+            "B0 must be scalar or shape [batch_size]. "
+            f"Received {tuple(B_prev.shape)} for batch_size={scored_returns.shape[0]}."
+        )
+
+    reward_return = scored_returns[:, horizon_days - 1]
+    var_prev = torch.clamp(B_prev - A_prev.pow(2), min=float(dsr_var_eps))
+    numerator = B_prev * (reward_return - A_prev) - 0.5 * A_prev * (reward_return.pow(2) - B_prev)
+    reward = numerator / (var_prev.pow(1.5) + float(dsr_var_eps))
+    if reward_clip is not None:
+        clip_value = float(reward_clip)
+        if clip_value <= 0.0:
+            raise ValueError(f"reward_clip must be > 0 when set, received {reward_clip}.")
+        reward = torch.clamp(reward, min=-clip_value, max=clip_value)
+    return reward
+
+
+def compute_group_relative_advantage(
+    rewards: torch.Tensor,
+    *,
+    eps: float = 1e-6,
+    group_dim: int = 0,
+) -> torch.Tensor:
+    if rewards.numel() == 0:
+        raise ValueError("rewards must not be empty.")
+    if float(eps) <= 0.0:
+        raise ValueError(f"eps must be > 0, received {eps}.")
+    mean = rewards.mean(dim=group_dim, keepdim=True)
+    std = rewards.std(dim=group_dim, keepdim=True, unbiased=False)
+    return (rewards - mean) / (std + float(eps))
+
+
+def compute_policy_gradient_objective(
+    log_probs: torch.Tensor,
+    advantages: torch.Tensor,
+    *,
+    entropy: torch.Tensor | None = None,
+    entropy_coef: float = 0.0,
+    entropy_normalizer: float = 1.0,
+) -> torch.Tensor:
+    if tuple(log_probs.shape) != tuple(advantages.shape):
+        raise ValueError(
+            "log_probs and advantages must share the same shape. "
+            f"Received log_probs={tuple(log_probs.shape)} advantages={tuple(advantages.shape)}."
+        )
+    policy_loss = -(advantages.detach() * log_probs).mean()
+    if entropy is None:
+        return policy_loss
+    normalizer = float(entropy_normalizer)
+    if normalizer <= 0.0:
+        raise ValueError(f"entropy_normalizer must be > 0, received {entropy_normalizer}.")
+    return policy_loss - float(entropy_coef) * (entropy / normalizer).mean()

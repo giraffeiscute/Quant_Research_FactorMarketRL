@@ -132,7 +132,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--loss",
         default=None,
-        choices=["return", "sharpe", "dsr", "sortino", "mdd", "cvar"],
+        choices=["return", "sharpe", "sortino", "mdd", "cvar"],
     )
     parser.add_argument(
         "--refresh-existing-scenario-artifacts",

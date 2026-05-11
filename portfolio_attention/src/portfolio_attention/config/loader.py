@@ -10,6 +10,7 @@ import yaml
 
 from .schema import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
 from .validation import (
+    validate_train_config_against_data_config,
     validated_data_config,
     validated_evaluation_config,
     validated_model_config,
@@ -113,10 +114,14 @@ def load_experiment_config(yaml_path: str | Path | None = None) -> ExperimentCon
     if cfg.paths.output_root is not None:
         cfg.paths.output_root = Path(cfg.paths.output_root)
 
+    validated_data = validated_data_config(cfg.data)
+    validated_train = validated_train_config(cfg.train)
+    validate_train_config_against_data_config(validated_train, validated_data)
+
     return ExperimentConfig(
         paths=cfg.paths,
-        data=validated_data_config(cfg.data),
+        data=validated_data,
         model=validated_model_config(cfg.model),
-        train=validated_train_config(cfg.train),
+        train=validated_train,
         evaluation=validated_evaluation_config(cfg.evaluation),
     )

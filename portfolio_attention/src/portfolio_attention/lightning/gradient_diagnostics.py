@@ -27,10 +27,6 @@ GRADIENT_DIAGNOSTIC_FIELDS = [
     "allocation_logits_abs_max",
     "raw_allocation_min",
     "raw_allocation_max",
-    "dirichlet_alpha_min",
-    "dirichlet_alpha_max",
-    "dirichlet_alpha_mean",
-    "dirichlet_alpha_sum_mean",
 ]
 
 

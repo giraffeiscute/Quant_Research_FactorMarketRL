@@ -54,6 +54,7 @@ if __package__ is None or __package__ == "":
     )
     from portfolio_attention.lightning.logging import (
         CSV_METRIC_DECIMAL_PLACES,
+        RL_PREFERRED_METRIC_KEY_ORDER,
         RoundedCSVLogger,
         RoundedMetricsExperimentWriter,
     )
@@ -73,6 +74,7 @@ if __package__ is None or __package__ == "":
         resolve_runtime_configs_from_args,
     )
     from portfolio_attention.training.engine import _run_loss_step, build_training_model
+    from portfolio_attention.training.rl_engine import run_rl_policy_step
     from portfolio_attention.common.utils import save_runtime_config_artifact, set_seed
 else:
     from ..config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
@@ -96,6 +98,7 @@ else:
     )
     from .logging import (
         CSV_METRIC_DECIMAL_PLACES,
+        RL_PREFERRED_METRIC_KEY_ORDER,
         RoundedCSVLogger,
         RoundedMetricsExperimentWriter,
     )
@@ -115,6 +118,7 @@ else:
         resolve_runtime_configs_from_args,
     )
     from ..training.engine import _run_loss_step, build_training_model
+    from ..training.rl_engine import run_rl_policy_step
     from ..common.utils import save_runtime_config_artifact, set_seed
 
 
@@ -142,6 +146,7 @@ def _sync_legacy_module_hooks() -> None:
     _lightning_module.compute_validation_window_objective_loss = _compute_validation_window_objective_loss
     _lightning_module.compute_selected_stock_count_from_weights = _compute_selected_stock_count_from_weights
     _lightning_module.compute_average_turnover_from_weights = _compute_average_turnover_from_weights
+    _lightning_module.run_rl_policy_step = run_rl_policy_step
 
 
 class PortfolioLightningModule(_BasePortfolioLightningModule):
@@ -363,10 +368,15 @@ def _build_single_state_training_stack(
         state=data_config.state,
         train_config=train_config,
     )
+    rl_enabled = bool(train_config.rl_training.enabled)
     csv_logger = RoundedCSVLogger(
         save_dir=str(paths.outputs_dir),
         name="lightning_logs",
         version=f"{data_config.state}_{train_config.loss_name}",
+        metrics_filename=("RL_metrics.csv" if rl_enabled else "metrics.csv"),
+        preferred_metric_key_order=(
+            RL_PREFERRED_METRIC_KEY_ORDER if rl_enabled else None
+        ),
     )
 
     trainer = pl.Trainer(

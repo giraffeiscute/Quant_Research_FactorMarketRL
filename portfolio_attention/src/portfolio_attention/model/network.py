@@ -134,8 +134,6 @@ class PortfolioAttentionModel(nn.Module):
         self.allocation_smoothing_alpha = float(config.allocation_smoothing_alpha)
         self.initial_allocation_mode = str(config.initial_allocation_mode).strip().lower()
         self.initial_random_concentration = float(config.initial_random_concentration)
-        self.allocation_distribution_type = str(config.allocation_distribution_type).strip().lower()
-        self.dirichlet_alpha_offset = float(config.dirichlet_alpha_offset)
         if not isinstance(config.detach_prev_weight, bool):
             raise ValueError(
                 "detach_prev_weight must be a bool, "
@@ -157,16 +155,6 @@ class PortfolioAttentionModel(nn.Module):
             raise ValueError(
                 "initial_random_concentration must be > 0.0, "
                 f"received {self.initial_random_concentration}."
-            )
-        if self.allocation_distribution_type not in {"softmax", "dirichlet"}:
-            raise ValueError(
-                "allocation_distribution_type must be one of {'softmax', 'dirichlet'}, "
-                f"received {self.allocation_distribution_type!r}."
-            )
-        if self.dirichlet_alpha_offset <= 0.0:
-            raise ValueError(
-                "dirichlet_alpha_offset must be > 0.0, "
-                f"received {self.dirichlet_alpha_offset}."
             )
         self.stock_temporal_attention_window = (
             max_lookback
@@ -224,8 +212,6 @@ class PortfolioAttentionModel(nn.Module):
                 allocation_smoothing_alpha=self.allocation_smoothing_alpha,
                 detach_prev_weight=self.detach_prev_weight,
                 use_prev_weight_feature=self.use_prev_weight_feature,
-                allocation_distribution_type=self.allocation_distribution_type,
-                dirichlet_alpha_offset=self.dirichlet_alpha_offset,
             )
         elif self.stock_cross_sectional_encoder_type == "mlp":
             self.cross_sectional_scorer = MLPCrossSectionalScorer(
@@ -235,8 +221,6 @@ class PortfolioAttentionModel(nn.Module):
                 cross_sectional_dim=config.cross_sectional_dim,
                 dropout=config.dropout,
                 uses_post_temporal_identity=self.uses_post_temporal_identity,
-                allocation_distribution_type=self.allocation_distribution_type,
-                dirichlet_alpha_offset=self.dirichlet_alpha_offset,
             )
         else:
             raise ValueError(
@@ -271,41 +255,14 @@ class PortfolioAttentionModel(nn.Module):
 
     def _build_allocation_distribution_debug_info(
         self,
-        allocation_alpha: torch.Tensor | None,
         *,
         include_alpha_debug_stats: bool = False,
     ) -> dict[str, Any]:
-        if self.allocation_distribution_type == "softmax":
-            return {
-                "allocation_distribution_type": "softmax",
-                "allocation_sampling_mode": "deterministic",
-                "dirichlet_alpha_offset": None,
-            }
-
-        debug_info: dict[str, Any] = {
-            "allocation_distribution_type": "dirichlet",
-            "allocation_sampling_mode": "rsample" if self.training else "mean",
-            "dirichlet_alpha_offset": self.dirichlet_alpha_offset,
+        del include_alpha_debug_stats
+        return {
+            "allocation_distribution_type": "softmax",
+            "allocation_sampling_mode": "deterministic",
         }
-        if not include_alpha_debug_stats:
-            return debug_info
-
-        if allocation_alpha is None:
-            raise RuntimeError(
-                "allocation_alpha must be provided when allocation_distribution_type='dirichlet'."
-            )
-
-        alpha_detached = allocation_alpha.detach()
-        alpha_sum = alpha_detached.sum(dim=-1)
-        debug_info.update(
-            {
-                "dirichlet_alpha_min": alpha_detached.min().item(),
-                "dirichlet_alpha_max": alpha_detached.max().item(),
-                "dirichlet_alpha_mean": alpha_detached.mean().item(),
-                "dirichlet_alpha_sum_mean": alpha_sum.mean().item(),
-            }
-        )
-        return debug_info
 
     def forward(
         self,
@@ -394,7 +351,6 @@ class PortfolioAttentionModel(nn.Module):
         cash_logit = score_outputs.cash_logit
         stock_debug_info = score_outputs.debug_info
         precomputed_smoothing = score_outputs.precomputed_smoothing
-        allocation_alpha = score_outputs.allocation_alpha
 
         allocation_logits = torch.cat([stock_logits, cash_logit.unsqueeze(-1)], dim=-1)
         if precomputed_smoothing is None:
@@ -449,7 +405,7 @@ class PortfolioAttentionModel(nn.Module):
             "stock_temporal_current_shape": tuple(stock_temporal_current.shape),
             "stock_running_shape": tuple(stock_temporal_summary.shape),
             "stock_temporal_summary_shape": tuple(stock_temporal_summary.shape),
-            **self._build_allocation_distribution_debug_info(allocation_alpha),
+            **self._build_allocation_distribution_debug_info(),
             **stock_debug_info,
             **stock_temporal_debug_info,
             **market_temporal_debug_info,
@@ -463,7 +419,6 @@ class PortfolioAttentionModel(nn.Module):
             "allocation_logits": allocation_logits,
             "raw_allocation": raw_allocation,
             "allocation": allocation,
-            "allocation_alpha": allocation_alpha,
             "initial_allocation": initial_allocation,
             "previous_allocation": previous_allocation,
             "turnover": turnover,

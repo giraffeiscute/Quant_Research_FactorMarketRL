@@ -19,7 +19,6 @@ class TaskHeadResult:
     raw_allocation: torch.Tensor | None = None
     precomputed_smoothing: tuple[torch.Tensor, ...] | None = None
     allocation_distribution_debug_info: dict[str, Any] | None = None
-    allocation_alpha: torch.Tensor | None = None
 
 
 class MLPPortfolioHead(nn.Module):
@@ -33,8 +32,6 @@ class MLPPortfolioHead(nn.Module):
         cross_sectional_dim: int,
         cash_hidden_dim: int,
         dropout: float,
-        allocation_distribution_type: str = "softmax",
-        dirichlet_alpha_offset: float = 0.1,
     ) -> None:
         super().__init__()
         self.stock_score = nn.Sequential(
@@ -49,10 +46,7 @@ class MLPPortfolioHead(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(cash_hidden_dim, 1),
         )
-        self.allocation_distribution = AllocationDistribution(
-            allocation_distribution_type=allocation_distribution_type,
-            dirichlet_alpha_offset=dirichlet_alpha_offset,
-        )
+        self.allocation_distribution = AllocationDistribution()
 
     def forward(
         self,
@@ -75,7 +69,6 @@ class MLPPortfolioHead(nn.Module):
             debug_info={},
             raw_allocation=raw_allocation,
             allocation_distribution_debug_info=allocation_distribution_result.debug_info,
-            allocation_alpha=allocation_distribution_result.alpha,
         )
 
 
@@ -90,8 +83,6 @@ class AttentionPortfolioHead(nn.Module):
         allocation_smoothing_alpha: float,
         detach_prev_weight: bool,
         use_prev_weight_feature: bool,
-        allocation_distribution_type: str = "softmax",
-        dirichlet_alpha_offset: float = 0.1,
     ) -> None:
         super().__init__()
         self.stock_attention_dim = stock_attention_dim
@@ -101,10 +92,7 @@ class AttentionPortfolioHead(nn.Module):
 
         self.stock_cross_attention_score = nn.Linear(stock_attention_dim, 1)
         self.cash_cross_attention_score = nn.Linear(stock_attention_dim, 1)
-        self.allocation_distribution = AllocationDistribution(
-            allocation_distribution_type=allocation_distribution_type,
-            dirichlet_alpha_offset=dirichlet_alpha_offset,
-        )
+        self.allocation_distribution = AllocationDistribution()
         self.cash_state_mlp_base = nn.Sequential(
             nn.Linear(stock_attention_dim, stock_attention_dim),
             nn.GELU(),
@@ -156,7 +144,6 @@ class AttentionPortfolioHead(nn.Module):
                 debug_info={"used_prev_weight_feature": False},
                 raw_allocation=raw_allocation,
                 allocation_distribution_debug_info=allocation_distribution_result.debug_info,
-                allocation_alpha=allocation_distribution_result.alpha,
             )
 
         if self.stock_prev_weight_mlp is None or self.cash_prev_weight_mlp is None:
@@ -180,7 +167,6 @@ class AttentionPortfolioHead(nn.Module):
         stock_logits_by_step: list[torch.Tensor] = []
         cash_logit_by_step: list[torch.Tensor] = []
         raw_allocations_by_step: list[torch.Tensor] = []
-        allocation_alphas_by_step: list[torch.Tensor] = []
         allocations_by_step: list[torch.Tensor] = []
         turnovers_by_step: list[torch.Tensor] = []
         previous_allocations_by_step: list[torch.Tensor] = []
@@ -213,8 +199,6 @@ class AttentionPortfolioHead(nn.Module):
             )
             allocation_distribution_debug_info = allocation_distribution_result_t.debug_info
             raw_t = allocation_distribution_result_t.raw_allocation
-            if allocation_distribution_result_t.alpha is not None:
-                allocation_alphas_by_step.append(allocation_distribution_result_t.alpha)
             allocation_t = smoothing_alpha * raw_t + (1.0 - smoothing_alpha) * prev_weight_step
             allocation_delta_t = allocation_t - prev_weight_step
             turnover_t = 0.5 * torch.abs(allocation_delta_t).sum(dim=-1)
@@ -230,11 +214,6 @@ class AttentionPortfolioHead(nn.Module):
         stock_logits = torch.stack(stock_logits_by_step, dim=1)
         cash_logit = torch.stack(cash_logit_by_step, dim=1)
         raw_allocation = torch.stack(raw_allocations_by_step, dim=1)
-        allocation_alpha = (
-            torch.stack(allocation_alphas_by_step, dim=1)
-            if allocation_alphas_by_step
-            else None
-        )
         precomputed_smoothing = (
             raw_allocation,
             torch.stack(allocations_by_step, dim=1),
@@ -248,5 +227,4 @@ class AttentionPortfolioHead(nn.Module):
             raw_allocation=raw_allocation,
             precomputed_smoothing=precomputed_smoothing,
             allocation_distribution_debug_info=allocation_distribution_debug_info,
-            allocation_alpha=allocation_alpha,
         )

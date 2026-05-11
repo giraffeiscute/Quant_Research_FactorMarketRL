@@ -26,6 +26,7 @@ from ..config import (
     load_experiment_config,
 )
 from ..config.validation import (
+    validate_train_config_against_data_config,
     validated_data_config,
     validated_evaluation_config,
     validated_model_config,
@@ -70,7 +71,7 @@ TERMINAL_SUMMARY_KEYS = [
     "best_val_loss",
 ]
 VALID_STATES = ("bear", "neutral", "bull")
-DEFAULT_LOSSES = ["return", "sharpe", "dsr", "sortino", "mdd", "cvar"]
+DEFAULT_LOSSES = ["return", "sharpe", "sortino", "mdd", "cvar"]
 
 
 def _build_terminal_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -173,7 +174,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--loss",
         default=argparse.SUPPRESS,
-        choices=["return", "terminal_return", "sharpe", "dsr", "sortino", "mdd", "cvar"],
+        choices=["return", "terminal_return", "sharpe", "sortino", "mdd", "cvar"],
     )
     parser.add_argument("--losses", type=str, default=argparse.SUPPRESS)
     parser.add_argument("--parallel", type=int, default=1)
@@ -310,10 +311,10 @@ def resolve_runtime_configs_from_args(
     if train_overrides:
         resolved_train_config = replace(resolved_train_config, **train_overrides)
 
-    return (
-        validated_data_config(resolved_data_config),
-        validated_train_config(resolved_train_config),
-    )
+    validated_data = validated_data_config(resolved_data_config)
+    validated_train = validated_train_config(resolved_train_config)
+    validate_train_config_against_data_config(validated_train, validated_data)
+    return (validated_data, validated_train)
 
 def resolve_model_config_from_args(
     args: argparse.Namespace,
@@ -360,7 +361,7 @@ def resolve_evaluation_config_from_args(
 
 
 def _normalize_losses(raw_losses: list[str]) -> list[str]:
-    valid_losses = {"return", "sharpe", "dsr", "sortino", "mdd", "cvar"}
+    valid_losses = {"return", "sharpe", "sortino", "mdd", "cvar"}
     result: list[str] = []
     seen: set[str] = set()
     for loss in raw_losses:
