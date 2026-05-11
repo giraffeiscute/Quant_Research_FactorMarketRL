@@ -377,6 +377,7 @@ def _build_single_state_training_stack(
         preferred_metric_key_order=(
             RL_PREFERRED_METRIC_KEY_ORDER if rl_enabled else None
         ),
+        excluded_metric_keys={"val_loss_window"} if rl_enabled else None,
     )
 
     trainer = pl.Trainer(

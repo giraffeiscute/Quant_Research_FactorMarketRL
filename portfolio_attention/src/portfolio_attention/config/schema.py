@@ -202,15 +202,13 @@ class RLTrainingConfig:
     enabled: bool = False
     algorithm: Literal["grpo_like"] = "grpo_like"
     reward_type: Literal["dsr_day_last"] = "dsr_day_last"
-    group_size: int = 4
+    group_size: int = 10
     warmup_allocation_mode: Literal["deterministic_mean"] = "deterministic_mean"
-    dsr_eta: float = 0.01
     dsr_var_eps: float = 1e-8
     reward_clip: float = 5.0
     entropy_coef: float = 0.001
     alpha_min: float = 0.05
     alpha_max: float = 50.0
-    grad_clip_norm: float = 1.0
 
     @staticmethod
     def warmup_days_for_horizon(rolling_horizon_days: int) -> int:

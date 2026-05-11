@@ -112,11 +112,10 @@ def run_rl_policy_step(
         ).reshape(group_size, -1)
         advantages = compute_group_relative_advantage(rewards, group_dim=0)
     action_dim = int(alpha.shape[-1])
-    pg_loss_raw = -(advantages.detach() * sampled_log_probs).mean()
     entropy_per_dim = entropy / float(action_dim)
     entropy_loss = -float(train_config.rl_training.entropy_coef) * entropy_per_dim.mean()
     policy_loss = compute_policy_gradient_objective(
-        sampled_log_probs,
+        sampled_log_probs, #no detach
         advantages,
         entropy=entropy,
         entropy_coef=float(train_config.rl_training.entropy_coef),
@@ -137,7 +136,6 @@ def run_rl_policy_step(
     }
     metrics = {
         "train_policy_loss": policy_loss,
-        "train_pg_loss_raw": pg_loss_raw.detach(),
         "train_entropy_loss": entropy_loss.detach(),
         "train_entropy_per_dim": entropy_per_dim.detach().mean(),
         "train_alpha_min": alpha.detach().min(),
@@ -149,7 +147,6 @@ def run_rl_policy_step(
         "train_advantage_std": advantages.detach().std(unbiased=False),
         "train_log_prob_mean": sampled_log_probs.detach().mean(),
         "train_log_prob_std": sampled_log_probs.detach().std(unbiased=False),
-        "train_entropy": entropy.detach().mean(),
         "train_OT": sampled_turnover.detach().mean(),
         "train_return": sampled_net_reward_return.detach().mean(),
     }

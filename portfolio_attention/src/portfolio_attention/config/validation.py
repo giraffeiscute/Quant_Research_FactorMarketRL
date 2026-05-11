@@ -440,13 +440,6 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             f"received {config.group_size}."
         )
 
-    config.dsr_eta = float(config.dsr_eta)
-    if config.dsr_eta <= 0.0:
-        raise ValueError(
-            "TrainConfig.rl_training.dsr_eta must be > 0, "
-            f"received {config.dsr_eta}."
-        )
-
     config.dsr_var_eps = float(config.dsr_var_eps)
     if config.dsr_var_eps <= 0.0:
         raise ValueError(
@@ -484,13 +477,6 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
         raise ValueError(
             "TrainConfig.rl_training.alpha_min must be <= alpha_max, "
             f"received alpha_min={config.alpha_min} alpha_max={config.alpha_max}."
-        )
-
-    config.grad_clip_norm = float(config.grad_clip_norm)
-    if config.grad_clip_norm <= 0.0:
-        raise ValueError(
-            "TrainConfig.rl_training.grad_clip_norm must be > 0, "
-            f"received {config.grad_clip_norm}."
         )
 
     return config

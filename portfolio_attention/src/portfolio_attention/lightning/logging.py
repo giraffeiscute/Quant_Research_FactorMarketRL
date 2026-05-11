@@ -31,7 +31,6 @@ RL_PREFERRED_METRIC_KEY_ORDER = [
     "epoch",
     "step",
     "train_policy_loss",
-    "train_pg_loss_raw",
     "train_entropy_loss",
     "train_entropy_per_dim",
     "train_alpha_min",
@@ -43,11 +42,9 @@ RL_PREFERRED_METRIC_KEY_ORDER = [
     "train_advantage_std",
     "train_log_prob_mean",
     "train_log_prob_std",
-    "train_entropy",
     "train_OT",
     "train_return",
     "val_loss",
-    "val_loss_window",
     "val_return",
     "val_OT",
     "val_stock",
@@ -65,11 +62,13 @@ class RoundedMetricsExperimentWriter(ExperimentWriter):
         decimal_places: int = CSV_METRIC_DECIMAL_PLACES,
         metrics_filename: str = "metrics.csv",
         preferred_metric_key_order: list[str] | None = None,
+        excluded_metric_keys: set[str] | None = None,
     ) -> None:
         super().__init__(log_dir=log_dir)
         self.decimal_places = int(decimal_places)
         self.metrics_filename = str(metrics_filename)
         self.metrics_file_path = os.path.join(self.log_dir, self.metrics_filename)
+        self.excluded_metric_keys = set(excluded_metric_keys or set())
         self.preferred_metric_key_order = (
             list(preferred_metric_key_order)
             if preferred_metric_key_order is not None
@@ -92,7 +91,11 @@ class RoundedMetricsExperimentWriter(ExperimentWriter):
         if step is None:
             step = len(self.metrics)
 
-        metrics = {key: self._format_metric_value(key, value) for key, value in metrics_dict.items()}
+        metrics = {
+            key: self._format_metric_value(key, value)
+            for key, value in metrics_dict.items()
+            if key not in self.excluded_metric_keys
+        }
         metrics["step"] = step
         self.metrics.append(metrics)
 
@@ -117,6 +120,7 @@ class RoundedCSVLogger(CSVLogger):
         decimal_places: int = CSV_METRIC_DECIMAL_PLACES,
         metrics_filename: str = "metrics.csv",
         preferred_metric_key_order: list[str] | None = None,
+        excluded_metric_keys: set[str] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -127,6 +131,7 @@ class RoundedCSVLogger(CSVLogger):
             if preferred_metric_key_order is not None
             else None
         )
+        self.excluded_metric_keys = set(excluded_metric_keys or set())
 
     @property
     @rank_zero_experiment
@@ -143,5 +148,6 @@ class RoundedCSVLogger(CSVLogger):
             decimal_places=self.decimal_places,
             metrics_filename=self.metrics_filename,
             preferred_metric_key_order=self.preferred_metric_key_order,
+            excluded_metric_keys=self.excluded_metric_keys,
         )
         return self._experiment
