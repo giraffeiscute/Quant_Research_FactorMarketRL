@@ -166,6 +166,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
     )
     parser.add_argument(
+        "--inference-allocation-mode",
+        choices=["softmax", "dirichlet_mean"],
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--initial-random-concentration",
         type=float,
         default=argparse.SUPPRESS,
@@ -343,6 +348,8 @@ def resolve_model_config_from_args(
         ]
     if "initial_allocation_mode" in args_dict:
         model_overrides["initial_allocation_mode"] = args_dict["initial_allocation_mode"]
+    if "inference_allocation_mode" in args_dict:
+        model_overrides["inference_allocation_mode"] = args_dict["inference_allocation_mode"]
     if "initial_random_concentration" in args_dict:
         model_overrides["initial_random_concentration"] = args_dict["initial_random_concentration"]
     if model_overrides:

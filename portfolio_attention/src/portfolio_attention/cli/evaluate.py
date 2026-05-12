@@ -130,6 +130,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
     )
     parser.add_argument(
+        "--inference-allocation-mode",
+        choices=["softmax", "dirichlet_mean"],
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--loss",
         default=None,
         choices=["return", "sharpe", "sortino", "mdd", "cvar"],
@@ -214,6 +219,8 @@ def resolve_model_config_from_args(
         model_overrides["stock_cross_sectional_encoder_type"] = args_dict[
             "stock_cross_sectional_encoder_type"
         ]
+    if "inference_allocation_mode" in args_dict:
+        model_overrides["inference_allocation_mode"] = args_dict["inference_allocation_mode"]
     if model_overrides:
         resolved_model_config = replace(resolved_model_config, **model_overrides)
     return validated_model_config(resolved_model_config)

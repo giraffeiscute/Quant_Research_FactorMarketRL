@@ -48,6 +48,8 @@ def normalize_model_config_dict(config_dict: dict[str, Any]) -> dict[str, Any]:
         normalized["allocation_smoothing_alpha"] = 1.0
     if "initial_allocation_mode" not in normalized:
         normalized["initial_allocation_mode"] = "equal_weight"
+    if "inference_allocation_mode" not in normalized:
+        normalized["inference_allocation_mode"] = "softmax"
     if "initial_random_concentration" not in normalized:
         normalized["initial_random_concentration"] = 1.0
     if "detach_prev_weight" not in normalized:
@@ -308,6 +310,15 @@ def validate_model_config(config: ModelConfig) -> None:
             "ModelConfig.initial_allocation_mode must be one of "
             f"{sorted(valid_initial_allocation_modes)}, "
             f"received {config.initial_allocation_mode!r}."
+        )
+
+    config.inference_allocation_mode = str(config.inference_allocation_mode).strip().lower()
+    valid_inference_allocation_modes = {"softmax", "dirichlet_mean"}
+    if config.inference_allocation_mode not in valid_inference_allocation_modes:
+        raise ValueError(
+            "ModelConfig.inference_allocation_mode must be one of "
+            f"{sorted(valid_inference_allocation_modes)}, "
+            f"received {config.inference_allocation_mode!r}."
         )
 
     config.initial_random_concentration = float(config.initial_random_concentration)

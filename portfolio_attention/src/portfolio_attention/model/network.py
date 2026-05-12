@@ -133,6 +133,7 @@ class PortfolioAttentionModel(nn.Module):
         self.stock_cross_sectional_encoder_type = config.stock_cross_sectional_encoder_type
         self.allocation_smoothing_alpha = float(config.allocation_smoothing_alpha)
         self.initial_allocation_mode = str(config.initial_allocation_mode).strip().lower()
+        self.inference_allocation_mode = str(config.inference_allocation_mode).strip().lower()
         self.initial_random_concentration = float(config.initial_random_concentration)
         if not isinstance(config.detach_prev_weight, bool):
             raise ValueError(
@@ -145,6 +146,11 @@ class PortfolioAttentionModel(nn.Module):
             raise ValueError(
                 "initial_allocation_mode must be one of {'equal_weight', 'random_dirichlet'}, "
                 f"received {self.initial_allocation_mode!r}."
+            )
+        if self.inference_allocation_mode not in {"softmax", "dirichlet_mean"}:
+            raise ValueError(
+                "inference_allocation_mode must be one of {'softmax', 'dirichlet_mean'}, "
+                f"received {self.inference_allocation_mode!r}."
             )
         if not 0.0 <= self.allocation_smoothing_alpha <= 1.0:
             raise ValueError(
@@ -212,6 +218,7 @@ class PortfolioAttentionModel(nn.Module):
                 allocation_smoothing_alpha=self.allocation_smoothing_alpha,
                 detach_prev_weight=self.detach_prev_weight,
                 use_prev_weight_feature=self.use_prev_weight_feature,
+                inference_allocation_mode=self.inference_allocation_mode,
             )
         elif self.stock_cross_sectional_encoder_type == "mlp":
             self.cross_sectional_scorer = MLPCrossSectionalScorer(
@@ -221,6 +228,7 @@ class PortfolioAttentionModel(nn.Module):
                 cross_sectional_dim=config.cross_sectional_dim,
                 dropout=config.dropout,
                 uses_post_temporal_identity=self.uses_post_temporal_identity,
+                inference_allocation_mode=self.inference_allocation_mode,
             )
         else:
             raise ValueError(
@@ -260,7 +268,7 @@ class PortfolioAttentionModel(nn.Module):
     ) -> dict[str, Any]:
         del include_alpha_debug_stats
         return {
-            "allocation_distribution_type": "softmax",
+            "allocation_distribution_type": self.inference_allocation_mode,
             "allocation_sampling_mode": "deterministic",
         }
 

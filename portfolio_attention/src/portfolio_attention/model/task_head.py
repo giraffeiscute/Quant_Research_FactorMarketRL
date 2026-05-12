@@ -32,6 +32,7 @@ class MLPPortfolioHead(nn.Module):
         cross_sectional_dim: int,
         cash_hidden_dim: int,
         dropout: float,
+        inference_allocation_mode: str = "softmax",
     ) -> None:
         super().__init__()
         self.stock_score = nn.Sequential(
@@ -46,7 +47,9 @@ class MLPPortfolioHead(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(cash_hidden_dim, 1),
         )
-        self.allocation_distribution = AllocationDistribution()
+        self.allocation_distribution = AllocationDistribution(
+            inference_allocation_mode=inference_allocation_mode,
+        )
 
     def forward(
         self,
@@ -83,6 +86,7 @@ class AttentionPortfolioHead(nn.Module):
         allocation_smoothing_alpha: float,
         detach_prev_weight: bool,
         use_prev_weight_feature: bool,
+        inference_allocation_mode: str = "softmax",
     ) -> None:
         super().__init__()
         self.stock_attention_dim = stock_attention_dim
@@ -92,7 +96,9 @@ class AttentionPortfolioHead(nn.Module):
 
         self.stock_cross_attention_score = nn.Linear(stock_attention_dim, 1)
         self.cash_cross_attention_score = nn.Linear(stock_attention_dim, 1)
-        self.allocation_distribution = AllocationDistribution()
+        self.allocation_distribution = AllocationDistribution(
+            inference_allocation_mode=inference_allocation_mode,
+        )
         self.cash_state_mlp_base = nn.Sequential(
             nn.Linear(stock_attention_dim, stock_attention_dim),
             nn.GELU(),

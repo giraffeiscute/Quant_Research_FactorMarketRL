@@ -34,6 +34,7 @@ class MLPCrossSectionalScorer(nn.Module):
         cross_sectional_dim: int,
         dropout: float,
         uses_post_temporal_identity: bool,
+        inference_allocation_mode: str = "softmax",
     ) -> None:
         super().__init__()
         self.uses_post_temporal_identity = uses_post_temporal_identity
@@ -52,6 +53,7 @@ class MLPCrossSectionalScorer(nn.Module):
             cross_sectional_dim=cross_sectional_dim,
             cash_hidden_dim=cash_hidden_dim,
             dropout=dropout,
+            inference_allocation_mode=inference_allocation_mode,
         )
 
     @property
@@ -131,6 +133,7 @@ class AttentionCrossSectionalScorer(nn.Module):
         allocation_smoothing_alpha: float,
         detach_prev_weight: bool,
         use_prev_weight_feature: bool,
+        inference_allocation_mode: str = "softmax",
     ) -> None:
         super().__init__()
         self.uses_post_temporal_identity = uses_post_temporal_identity
@@ -170,6 +173,7 @@ class AttentionCrossSectionalScorer(nn.Module):
             allocation_smoothing_alpha=allocation_smoothing_alpha,
             detach_prev_weight=detach_prev_weight,
             use_prev_weight_feature=use_prev_weight_feature,
+            inference_allocation_mode=inference_allocation_mode,
         )
 
     @property
