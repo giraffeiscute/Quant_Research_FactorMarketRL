@@ -10,7 +10,8 @@ from torch.utils.data import DataLoader
 
 from ..config import EvaluationConfig
 from ..data.dataset import PortfolioPanelDataset, scale_stock_feature_context_array
-from .artifacts import build_per_scenario_payload
+from .results import build_legacy_per_scenario_payload
+from .types import RollingScenarioOutputs
 from ..model import PortfolioAttentionModel
 
 ROLLING_ONE_STEP_EVALUATION_MODE = "rolling_one_step"
@@ -118,7 +119,7 @@ def _rebuild_evaluation_window_x_stock(
     return rebuilt_batch
 
 
-def _collect_single_scenario_rolling_one_step_outputs(
+def collect_single_scenario_rolling_outputs(
     *,
     model: PortfolioAttentionModel,
     dataset: PortfolioPanelDataset,
@@ -128,7 +129,7 @@ def _collect_single_scenario_rolling_one_step_outputs(
     evaluation_label: str,
     collect_weights: bool = True,
     interrupt_checker: Callable[[], None] | None = None,
-) -> dict[str, Any]:
+) -> RollingScenarioOutputs:
     scenario_ids = raw_batch.get("scenario_id")
     source_paths = raw_batch.get("source_path")
     score_mask = raw_batch.get("score_mask")
@@ -262,22 +263,43 @@ def _collect_single_scenario_rolling_one_step_outputs(
             f"Expected {context_time_steps}, received {int(context_target_time_indices.shape[0])}."
         )
 
-    payload: dict[str, Any] = {
-        "scenario_id": scenario_id,
-        "source_path": source_path,
-        "portfolio_returns": torch.stack(portfolio_returns_by_day, dim=0),
-        "turnover": torch.stack(turnover_by_day, dim=0),
-        "scored_target_time_indices": scored_target_time_indices,
-        "context_target_time_indices": context_target_time_indices,
-        "lookback_days": resolved_lookback_days,
-        "context_time_steps": context_time_steps,
-        "num_rolling_windows": int(scored_positions.numel()),
-        "evaluation_price_anchor_mode": EVALUATION_PRICE_ANCHOR_MODE_PER_WINDOW,
-    }
-    if collect_weights:
-        payload["stock_weights"] = torch.stack(stock_weights_by_day, dim=0)
-        payload["cash_weights"] = torch.stack(cash_weights_by_day, dim=0)
-    return payload
+    return RollingScenarioOutputs(
+        scenario_id=scenario_id,
+        source_path=str(source_path),
+        portfolio_returns=torch.stack(portfolio_returns_by_day, dim=0),
+        turnover=torch.stack(turnover_by_day, dim=0),
+        scored_target_time_indices=scored_target_time_indices,
+        context_target_time_indices=context_target_time_indices,
+        lookback_days=resolved_lookback_days,
+        context_time_steps=context_time_steps,
+        num_rolling_windows=int(scored_positions.numel()),
+        evaluation_price_anchor_mode=EVALUATION_PRICE_ANCHOR_MODE_PER_WINDOW,
+        stock_weights=torch.stack(stock_weights_by_day, dim=0) if collect_weights else None,
+        cash_weights=torch.stack(cash_weights_by_day, dim=0) if collect_weights else None,
+    )
+
+
+def _collect_single_scenario_rolling_one_step_outputs(
+    *,
+    model: PortfolioAttentionModel,
+    dataset: PortfolioPanelDataset,
+    raw_batch: dict[str, Any],
+    device: torch.device,
+    lookback_days: int,
+    evaluation_label: str,
+    collect_weights: bool = True,
+    interrupt_checker: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    return collect_single_scenario_rolling_outputs(
+        model=model,
+        dataset=dataset,
+        raw_batch=raw_batch,
+        device=device,
+        lookback_days=lookback_days,
+        evaluation_label=evaluation_label,
+        collect_weights=collect_weights,
+        interrupt_checker=interrupt_checker,
+    ).to_legacy_payload()
 
 
 def _collect_single_holdout_scenario_payload(
@@ -291,7 +313,7 @@ def _collect_single_holdout_scenario_payload(
     checkpoint: dict[str, Any],
     interrupt_checker: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    rolling_outputs = _collect_single_scenario_rolling_one_step_outputs(
+    rolling_outputs = collect_single_scenario_rolling_outputs(
         model=model,
         dataset=dataset,
         raw_batch=raw_batch,
@@ -301,26 +323,28 @@ def _collect_single_holdout_scenario_payload(
         collect_weights=True,
         interrupt_checker=interrupt_checker,
     )
-    return build_per_scenario_payload(
-        scenario_id=str(rolling_outputs["scenario_id"]),
-        source_path=Path(str(rolling_outputs["source_path"])),
+    if rolling_outputs.stock_weights is None or rolling_outputs.cash_weights is None:
+        raise RuntimeError("Holdout rolling evaluation requires stock and cash weights.")
+    return build_legacy_per_scenario_payload(
+        scenario_id=rolling_outputs.scenario_id,
+        source_path=Path(rolling_outputs.source_path),
         loss_name=loss_name,
         checkpoint=checkpoint,
-        context_target_time_indices=rolling_outputs["context_target_time_indices"],
-        target_time_indices=rolling_outputs["scored_target_time_indices"],
-        portfolio_returns=rolling_outputs["portfolio_returns"],
-        turnover=rolling_outputs["turnover"],
-        stock_weights=rolling_outputs["stock_weights"],
-        cash_weights=rolling_outputs["cash_weights"],
+        context_target_time_indices=rolling_outputs.context_target_time_indices,
+        target_time_indices=rolling_outputs.scored_target_time_indices,
+        portfolio_returns=rolling_outputs.portfolio_returns,
+        turnover=rolling_outputs.turnover,
+        stock_weights=rolling_outputs.stock_weights,
+        cash_weights=rolling_outputs.cash_weights,
         dataset=dataset,
         evaluation_config=evaluation_config,
-        warmup_time_steps=int(rolling_outputs["lookback_days"]),
+        warmup_time_steps=int(rolling_outputs.lookback_days),
         evaluation_mode=ROLLING_ONE_STEP_EVALUATION_MODE,
-        rolling_window_lookback_days=int(rolling_outputs["lookback_days"]),
+        rolling_window_lookback_days=int(rolling_outputs.lookback_days),
         rolling_window_horizon_days=ROLLING_ONE_STEP_HORIZON_DAYS,
         rolling_window_stride_days=ROLLING_ONE_STEP_STRIDE_DAYS,
-        num_rolling_windows=int(rolling_outputs["num_rolling_windows"]),
-        evaluation_price_anchor_mode=str(rolling_outputs["evaluation_price_anchor_mode"]),
+        num_rolling_windows=int(rolling_outputs.num_rolling_windows),
+        evaluation_price_anchor_mode=str(rolling_outputs.evaluation_price_anchor_mode),
     )
 
 

@@ -19,12 +19,22 @@ from .validation import (
 
 
 @dataclass
+class ExecutionConfig:
+    states: list[str] | None = None
+    losses: list[str] | None = None
+    accelerator: str | None = None
+    lightning_devices: int | None = None
+    num_workers: int | None = None
+
+
+@dataclass
 class ExperimentConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
 
 
 _SECTION_TYPES = {
@@ -33,6 +43,7 @@ _SECTION_TYPES = {
     "model": ModelConfig,
     "train": TrainConfig,
     "evaluation": EvaluationConfig,
+    "execution": ExecutionConfig,
 }
 _PATH_FIELDS = {
     "paths": {"project_dir", "output_root"},
@@ -124,4 +135,5 @@ def load_experiment_config(yaml_path: str | Path | None = None) -> ExperimentCon
         model=validated_model_config(cfg.model),
         train=validated_train,
         evaluation=validated_evaluation_config(cfg.evaluation),
+        execution=cfg.execution,
     )

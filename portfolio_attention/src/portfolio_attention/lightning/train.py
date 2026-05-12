@@ -62,10 +62,12 @@ if __package__ is None or __package__ == "":
     from portfolio_attention.lightning.module import PortfolioLightningModule as _BasePortfolioLightningModule
     from portfolio_attention.lightning.validation import (
         ScenarioRollingValidationMetric,
+        compute_validation_scenario_metrics,
         compute_validation_window_objective_loss,
     )
     from portfolio_attention.model.losses import build_loss
     from portfolio_attention.cli.train import (
+        _experiment_config_from_args,
         _parse_states_args,
         build_arg_parser,
         resolve_model_config_from_args,
@@ -106,10 +108,12 @@ else:
     from .module import PortfolioLightningModule as _BasePortfolioLightningModule
     from .validation import (
         ScenarioRollingValidationMetric,
+        compute_validation_scenario_metrics,
         compute_validation_window_objective_loss,
     )
     from ..model.losses import build_loss
     from ..cli.train import (
+        _experiment_config_from_args,
         _parse_states_args,
         build_arg_parser,
         resolve_model_config_from_args,
@@ -128,11 +132,23 @@ def _sync_legacy_validation_hooks() -> None:
         _slice_single_scenario_rolling_window_batch
     )
     _lightning_validation._run_loss_step = _run_loss_step
+    _lightning_validation._collect_validation_rolling_outputs = (
+        _collect_single_scenario_rolling_one_step_outputs
+    )
+    _lightning_validation._compute_validation_window_objective_loss = (
+        _compute_validation_window_objective_loss
+    )
+    _lightning_validation.build_loss = build_loss
 
 
 def _compute_validation_window_objective_loss(**kwargs):
     _sync_legacy_validation_hooks()
     return compute_validation_window_objective_loss(**kwargs)
+
+
+def _compute_validation_scenario_metrics(**kwargs):
+    _sync_legacy_validation_hooks()
+    return compute_validation_scenario_metrics(**kwargs)
 
 
 def _sync_legacy_module_hooks() -> None:
@@ -144,6 +160,7 @@ def _sync_legacy_module_hooks() -> None:
     )
     _lightning_module.build_loss = build_loss
     _lightning_module.compute_validation_window_objective_loss = _compute_validation_window_objective_loss
+    _lightning_module.compute_validation_scenario_metrics = _compute_validation_scenario_metrics
     _lightning_module.compute_selected_stock_count_from_weights = _compute_selected_stock_count_from_weights
     _lightning_module.compute_average_turnover_from_weights = _compute_average_turnover_from_weights
     _lightning_module.run_rl_policy_step = run_rl_policy_step
@@ -362,6 +379,7 @@ def _build_single_state_training_stack(
         monitor="val_loss_window",
         mode="min",
         patience=int(train_config.early_stopping_patience),
+        check_on_train_epoch_end=False,
     )
     config_epoch_checkpoint_callback = ConfigEpochCheckpointCallback(
         paths=paths,
@@ -473,9 +491,12 @@ def main() -> None:
         _validate_cli_args(args)
 
         states_to_run = _parse_states_args(args)
-        if len(states_to_run) > 1 and getattr(args, "resume_from", None) is not None:
+        resume_from_requested = getattr(args, "resume_from", None) is not None
+        if not resume_from_requested and len(states_to_run) > 1:
+            resume_from_requested = _experiment_config_from_args(args).train.resume_from is not None
+        if len(states_to_run) > 1 and resume_from_requested:
             raise ValueError(
-                "Multi-state training does not support --resume-from. "
+                "Multi-run Lightning training does not support train.resume_from. "
                 "Resume one state at a time."
             )
 

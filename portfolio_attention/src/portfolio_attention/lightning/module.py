@@ -11,20 +11,16 @@ import torch
 from ..config import DataConfig, ModelConfig, TrainConfig
 from ..config.validation import validated_train_config
 from ..data.dataset import PortfolioPanelDataset
-from ..evaluation.metrics import (
-    apply_transaction_cost_to_returns,
-    compute_average_turnover_from_weights,
-    compute_selected_stock_count_from_weights,
-)
-from ..evaluation.runtime import _collect_single_scenario_rolling_one_step_outputs
-from ..model.losses import build_loss
 from ..training.engine import _run_loss_step, build_training_model
 from ..training.rl_engine import run_rl_policy_step
 from .gradient_diagnostics import (
     GradientDiagnosticsCSVWriter,
     compute_gradient_diagnostics,
 )
-from .validation import ScenarioRollingValidationMetric, compute_validation_window_objective_loss
+from .validation import (
+    ScenarioRollingValidationMetric,
+    compute_validation_scenario_metrics,
+)
 
 
 class PortfolioLightningModule(pl.LightningModule):
@@ -179,54 +175,27 @@ class PortfolioLightningModule(pl.LightningModule):
 
     def validation_step(self, batch: dict[str, Any], batch_idx: int) -> None:
         del batch_idx
-        rolling_outputs = _collect_single_scenario_rolling_one_step_outputs(
+        metrics = compute_validation_scenario_metrics(
             model=self.model,
             dataset=self.dataset,
             raw_batch=batch,
             device=self.device,
-            lookback_days=int(self.dataset.metadata.lookback_days),
-            evaluation_label="Lightning validation rolling evaluation",
-            collect_weights=True,
-        )
-        scored_returns = apply_transaction_cost_to_returns(
-            rolling_outputs["portfolio_returns"],
-            rolling_outputs["turnover"],
-            transaction_cost_rate=self.evaluation_transaction_cost_rate,
-        ).unsqueeze(0)
-        loss = build_loss(self.train_config.loss_name, scored_returns)
-        window_loss, window_count = compute_validation_window_objective_loss(
-            model=self.model,
-            dataset=self.dataset,
-            raw_batch=batch,
-            device=self.device,
-            lookback_days=int(self.dataset.metadata.lookback_days),
-            rolling_horizon_days=int(self.dataset.metadata.rolling_horizon_days),
-            rolling_stride_days=int(self.dataset.metadata.rolling_stride_days),
             loss_name=self.train_config.loss_name,
             turnover_penalty=float(self.train_config.turnover_penalty),
-            transaction_cost_rate=float(self.evaluation_transaction_cost_rate),
+            evaluation_transaction_cost_rate=float(self.evaluation_transaction_cost_rate),
             turnover_penalty_norm=str(self.train_config.turnover_penalty_norm),
+            stock_count_weight_threshold=self.stock_count_weight_threshold,
+            stock_count_min_active_days=self.stock_count_min_active_days,
         )
-        scenario_final_return = (torch.prod(1.0 + scored_returns, dim=1) - 1.0).mean()
-        selected_stock_count = compute_selected_stock_count_from_weights(
-            rolling_outputs["stock_weights"],
-            threshold=self.stock_count_weight_threshold,
-            min_active_days=self.stock_count_min_active_days,
-        )
-        average_turnover = compute_average_turnover_from_weights(
-            rolling_outputs["stock_weights"],
-            rolling_outputs["cash_weights"],
-        )
-        mean_cash_weight = rolling_outputs["cash_weights"].mean()
 
         self.val_metric.update(
-            loss_value=loss.detach(),
-            window_loss_value=window_loss.detach(),
-            window_count=window_count,
-            scenario_final_return=scenario_final_return.detach(),
-            selected_stock_count=selected_stock_count,
-            average_turnover=average_turnover,
-            mean_cash_weight=mean_cash_weight,
+            loss_value=metrics["loss"],
+            window_loss_value=metrics["window_loss"],
+            window_count=metrics["window_count"],
+            scenario_final_return=metrics["scenario_final_return"],
+            selected_stock_count=metrics["selected_stock_count"],
+            average_turnover=metrics["average_turnover"],
+            mean_cash_weight=metrics["mean_cash_weight"],
         )
 
     def on_validation_epoch_end(self) -> None:
@@ -251,6 +220,21 @@ class PortfolioLightningModule(pl.LightningModule):
         self._log_validation_epoch_metric(
             "val_cash",
             metrics["val_cash"],
+            prog_bar=False,
+        )
+        self._log_validation_epoch_metric(
+            "validation_stocks_bought",
+            metrics["validation_stocks_bought"],
+            prog_bar=False,
+        )
+        self._log_validation_epoch_metric(
+            "validation_average_turnover",
+            metrics["validation_average_turnover"],
+            prog_bar=False,
+        )
+        self._log_validation_epoch_metric(
+            "validation_mean_cash_weight",
+            metrics["validation_mean_cash_weight"],
             prog_bar=False,
         )
 

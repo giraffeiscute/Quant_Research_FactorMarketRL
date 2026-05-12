@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, TypedDict
 from typing_extensions import NotRequired
 
@@ -174,6 +175,41 @@ class ScenarioRuntimeTensors:
     cash_weights: torch.Tensor | None
     portfolio_returns: torch.Tensor | None
     target_time_indices: torch.Tensor | None
+
+
+@dataclass
+class RollingScenarioOutputs:
+    scenario_id: str
+    source_path: str
+    portfolio_returns: torch.Tensor
+    turnover: torch.Tensor
+    scored_target_time_indices: torch.Tensor
+    context_target_time_indices: torch.Tensor
+    lookback_days: int
+    context_time_steps: int
+    num_rolling_windows: int
+    evaluation_price_anchor_mode: str
+    stock_weights: torch.Tensor | None = None
+    cash_weights: torch.Tensor | None = None
+
+    def to_legacy_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "scenario_id": self.scenario_id,
+            "source_path": Path(self.source_path),
+            "portfolio_returns": self.portfolio_returns,
+            "turnover": self.turnover,
+            "scored_target_time_indices": self.scored_target_time_indices,
+            "context_target_time_indices": self.context_target_time_indices,
+            "lookback_days": int(self.lookback_days),
+            "context_time_steps": int(self.context_time_steps),
+            "num_rolling_windows": int(self.num_rolling_windows),
+            "evaluation_price_anchor_mode": self.evaluation_price_anchor_mode,
+        }
+        if self.stock_weights is not None:
+            payload["stock_weights"] = self.stock_weights
+        if self.cash_weights is not None:
+            payload["cash_weights"] = self.cash_weights
+        return payload
 
 
 @dataclass

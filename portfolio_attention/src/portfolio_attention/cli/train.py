@@ -271,6 +271,13 @@ def resolve_runtime_configs_from_args(
             )
         data_overrides["state"] = normalized_state
         data_overrides["scenario_dir"] = default_scenario_dir(normalized_state)
+    elif experiment_config is not None and experiment_config.execution.states:
+        execution_states = _normalize_states(
+            [str(state) for state in experiment_config.execution.states]
+        )
+        if len(execution_states) == 1:
+            data_overrides["state"] = execution_states[0]
+            data_overrides["scenario_dir"] = default_scenario_dir(execution_states[0])
     if "sample_num_stocks" in args_dict:
         data_overrides["sample_num_stocks"] = args_dict["sample_num_stocks"]
     if data_overrides:
@@ -283,6 +290,12 @@ def resolve_runtime_configs_from_args(
         train_overrides["seed"] = args_dict["seed"]
     if "loss" in args_dict:
         train_overrides["loss_name"] = args_dict["loss"]
+    elif experiment_config is not None and experiment_config.execution.losses:
+        execution_losses = _normalize_losses(
+            [str(loss) for loss in experiment_config.execution.losses]
+        )
+        if len(execution_losses) == 1:
+            train_overrides["loss_name"] = execution_losses[0]
     if "num_epochs" in args_dict:
         train_overrides["num_epochs"] = args_dict["num_epochs"]
     if "weight_decay" in args_dict:
@@ -394,7 +407,11 @@ def _parse_losses_args(args: argparse.Namespace) -> list[str]:
         if not raw or not raw.strip():
             raise ValueError("--losses cannot be empty string")
         return _normalize_losses(raw.split(","))
-    config_loss_name = _experiment_config_from_args(args).train.loss_name
+    experiment_config = _experiment_config_from_args(args)
+    execution_losses = experiment_config.execution.losses
+    if execution_losses:
+        return _normalize_losses([str(loss) for loss in execution_losses])
+    config_loss_name = experiment_config.train.loss_name
     if config_loss_name:
         return _normalize_losses([config_loss_name])
     return list(DEFAULT_LOSSES)
@@ -431,7 +448,13 @@ def _parse_states_args(args: argparse.Namespace) -> list[str]:
         if not parsed:
             raise ValueError("--states must include at least one valid state")
         return parsed
-    return [_experiment_config_from_args(args).data.state]
+    experiment_config = _experiment_config_from_args(args)
+    execution_states = experiment_config.execution.states
+    if execution_states:
+        parsed = _normalize_states([str(state) for state in execution_states])
+        if parsed:
+            return parsed
+    return [experiment_config.data.state]
 
 
 def _parse_resume_checkpoints_arg(args: argparse.Namespace) -> dict[str, Path] | None:
