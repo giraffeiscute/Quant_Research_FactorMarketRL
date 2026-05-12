@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 from torch.utils.data import DataLoader, Dataset
 
 from ..config import DataConfig

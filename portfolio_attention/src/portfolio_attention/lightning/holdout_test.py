@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Any, Callable
 
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler

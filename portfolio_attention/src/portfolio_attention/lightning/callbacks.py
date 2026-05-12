@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import Callback
+import lightning.pytorch as pl
+from lightning.pytorch.callbacks import Callback
 
 from ..artifact import paths as artifact_paths
 from ..config import PathsConfig, TrainConfig

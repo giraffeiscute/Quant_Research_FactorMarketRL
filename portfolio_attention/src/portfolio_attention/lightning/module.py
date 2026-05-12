@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
 
 from ..config import DataConfig, ModelConfig, TrainConfig

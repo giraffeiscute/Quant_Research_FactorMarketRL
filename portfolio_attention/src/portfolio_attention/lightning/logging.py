@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 from lightning_fabric.loggers.logger import rank_zero_experiment
-from pytorch_lightning.loggers.csv_logs import CSVLogger, ExperimentWriter
+from lightning.pytorch.loggers.csv_logs import CSVLogger, ExperimentWriter
 import torch
 
 

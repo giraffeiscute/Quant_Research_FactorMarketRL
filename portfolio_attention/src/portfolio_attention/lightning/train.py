@@ -28,8 +28,9 @@ else:
         _trainer_was_interrupted,
     )
 
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+import lightning.pytorch as pl
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.loggers import WandbLogger
 import torch
 
 if __package__ is None or __package__ == "":
@@ -397,6 +398,17 @@ def _build_single_state_training_stack(
         ),
         excluded_metric_keys={"val_loss_window"} if rl_enabled else None,
     )
+    trainer_logger = csv_logger
+    if rl_enabled:
+        wandb_logger = WandbLogger(
+            save_dir=str(paths.outputs_dir),
+            project="portfolio-attention-rl",
+            name=f"{data_config.state}_{train_config.loss_name}",
+            offline=False,
+            log_model=False,
+        )
+        wandb_logger.experiment.define_metric("*", step_metric="epoch")
+        trainer_logger = [csv_logger, wandb_logger]
 
     trainer = pl.Trainer(
         accelerator="gpu",
@@ -406,7 +418,7 @@ def _build_single_state_training_stack(
         max_epochs=int(train_config.num_epochs),
         gradient_clip_val=float(train_config.grad_clip_norm),
         callbacks=[checkpoint_callback, early_stopping_callback, config_epoch_checkpoint_callback],
-        logger=csv_logger,
+        logger=trainer_logger,
         default_root_dir=str(paths.outputs_dir),
         enable_progress_bar=True,
         log_every_n_steps=1,
@@ -415,49 +427,61 @@ def _build_single_state_training_stack(
     return model, trainer, config_epoch_checkpoint_callback
 
 
+def _finish_wandb_run_if_needed(train_config: TrainConfig) -> None:
+    if not bool(train_config.rl_training.enabled):
+        return
+    import wandb
+
+    if wandb.run is not None:
+        wandb.finish()
+
+
 def _run_single_state(args: argparse.Namespace) -> None:
     paths, data_config, train_config, evaluation_config, model_config = _resolve_single_state_runtime(args)
 
-    set_seed(int(train_config.seed))
-    pl.seed_everything(int(train_config.seed), workers=True)
-
-    datamodule = _prepare_single_state_datamodule(
-        args=args,
-        data_config=data_config,
-    )
-    model, trainer, config_epoch_checkpoint_callback = _build_single_state_training_stack(
-        args=args,
-        paths=paths,
-        data_config=data_config,
-        train_config=train_config,
-        model_config=model_config,
-        evaluation_config=evaluation_config,
-        datamodule=datamodule,
-    )
-    _emit_lightning_console_message("Starting trainer.fit().")
-    _INTERRUPT_CONTROLLER.raise_if_interrupted()
     try:
-        trainer.fit(
-            model=model,
-            datamodule=datamodule,
-            ckpt_path=(str(train_config.resume_from) if train_config.resume_from is not None else None),
+        set_seed(int(train_config.seed))
+        pl.seed_everything(int(train_config.seed), workers=True)
+
+        datamodule = _prepare_single_state_datamodule(
+            args=args,
+            data_config=data_config,
         )
-    except BaseException as exc:
-        if _INTERRUPT_CONTROLLER.interrupted or _exception_represents_interrupt(exc):
-            raise KeyboardInterrupt("Trainer interrupted by user signal.") from exc
-        raise
-    if _trainer_was_interrupted(trainer):
-        raise KeyboardInterrupt("Trainer interrupted by user signal.")
-    _INTERRUPT_CONTROLLER.raise_if_interrupted()
-    _run_post_training_holdout_after_fit_with_barriers(
-        trainer=trainer,
-        checkpoint_callback=config_epoch_checkpoint_callback,
-        paths=paths,
-        data_config=data_config,
-        model_config=model_config,
-        train_config=train_config,
-        datamodule=datamodule,
-    )
+        model, trainer, config_epoch_checkpoint_callback = _build_single_state_training_stack(
+            args=args,
+            paths=paths,
+            data_config=data_config,
+            train_config=train_config,
+            model_config=model_config,
+            evaluation_config=evaluation_config,
+            datamodule=datamodule,
+        )
+        _emit_lightning_console_message("Starting trainer.fit().")
+        _INTERRUPT_CONTROLLER.raise_if_interrupted()
+        try:
+            trainer.fit(
+                model=model,
+                datamodule=datamodule,
+                ckpt_path=(str(train_config.resume_from) if train_config.resume_from is not None else None),
+            )
+        except BaseException as exc:
+            if _INTERRUPT_CONTROLLER.interrupted or _exception_represents_interrupt(exc):
+                raise KeyboardInterrupt("Trainer interrupted by user signal.") from exc
+            raise
+        if _trainer_was_interrupted(trainer):
+            raise KeyboardInterrupt("Trainer interrupted by user signal.")
+        _INTERRUPT_CONTROLLER.raise_if_interrupted()
+        _run_post_training_holdout_after_fit_with_barriers(
+            trainer=trainer,
+            checkpoint_callback=config_epoch_checkpoint_callback,
+            paths=paths,
+            data_config=data_config,
+            model_config=model_config,
+            train_config=train_config,
+            datamodule=datamodule,
+        )
+    finally:
+        _finish_wandb_run_if_needed(train_config)
 
 
 def _run_states_sequentially(args: argparse.Namespace, states_to_run: list[str]) -> list[str]:
