@@ -1,0 +1,17 @@
+============================================================
+Portfolio Weight Evaluation
+============================================================
+Factor-0 Weight Corr: -0.038969
+Factor-0 Turnover Corr: 0.075803
+Factor-1 Weight Corr: -0.044640
+Factor-1 Turnover Corr: -0.007806
+Factor-2 Weight Corr: 0.048107
+Factor-2 Turnover Corr: 0.075648
+------------------------------------------------------------
+Factor Regression R^2: -173.070712
+Market Bias: 0.500952
+Cash Average: 0.500714
+Concentration HHI: 25.110275
+Dominant Mode Strength: 0.019567
+Effective Rank: 90.793192
+------------------------------------------------------------
