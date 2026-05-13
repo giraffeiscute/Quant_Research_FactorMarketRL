@@ -72,6 +72,10 @@ TERMINAL_SUMMARY_KEYS = [
 ]
 VALID_STATES = ("bear", "neutral", "bull")
 DEFAULT_LOSSES = ["return", "sharpe", "sortino", "mdd", "cvar"]
+RESUME_FEATURE_DISABLED_ERROR = (
+    "resume_from is deprecated and disabled. "
+    "Use post_train_from for weight-only post-training."
+)
 
 
 def _build_terminal_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -186,6 +190,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num-epochs", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--weight-decay", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--enable-lr-warmup-decay", action="store_true", default=argparse.SUPPRESS)
+    parser.add_argument("--lr-warmup-fraction", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--lr-min-factor", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--turnover-penalty", type=float, default=argparse.SUPPRESS)
     parser.add_argument(
         "--turnover-penalty-norm",
@@ -205,6 +212,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
     )
     parser.add_argument("--early-stopping-patience", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--post-train-from", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--resume-from", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--resume-checkpoints", type=str, default=argparse.SUPPRESS)
     parser.add_argument(
@@ -300,6 +308,12 @@ def resolve_runtime_configs_from_args(
         train_overrides["num_epochs"] = args_dict["num_epochs"]
     if "weight_decay" in args_dict:
         train_overrides["weight_decay"] = args_dict["weight_decay"]
+    if "enable_lr_warmup_decay" in args_dict:
+        train_overrides["enable_lr_warmup_decay"] = bool(args_dict["enable_lr_warmup_decay"])
+    if "lr_warmup_fraction" in args_dict:
+        train_overrides["lr_warmup_fraction"] = args_dict["lr_warmup_fraction"]
+    if "lr_min_factor" in args_dict:
+        train_overrides["lr_min_factor"] = args_dict["lr_min_factor"]
     if "turnover_penalty" in args_dict:
         train_overrides["turnover_penalty"] = args_dict["turnover_penalty"]
     if args_dict.get("turnover_penalty_norm") is not None:
@@ -316,6 +330,8 @@ def resolve_runtime_configs_from_args(
         )
     if "early_stopping_patience" in args_dict:
         train_overrides["early_stopping_patience"] = args_dict["early_stopping_patience"]
+    if "post_train_from" in args_dict:
+        train_overrides["post_train_from"] = args_dict["post_train_from"]
     if "resume_from" in args_dict:
         train_overrides["resume_from"] = args_dict["resume_from"]
     if "select_best_from_last_x_epochs" in args_dict:
@@ -462,38 +478,10 @@ def _parse_resume_checkpoints_arg(args: argparse.Namespace) -> dict[str, Path] |
     if "resume_checkpoints" not in args_dict:
         return None
 
-    raw_value = str(args_dict["resume_checkpoints"]).strip()
-    if not raw_value:
-        raise ValueError("--resume-checkpoints cannot be empty string")
-
-    resume_checkpoints_by_loss: dict[str, Path] = {}
-    for chunk in raw_value.split(","):
-        entry = chunk.strip()
-        if not entry:
-            continue
-        if "=" not in entry:
-            raise ValueError(
-                "--resume-checkpoints entries must use the format loss=path. "
-                f"Received {entry!r}."
-            )
-        raw_loss_name, raw_path = entry.split("=", 1)
-        normalized_losses = _normalize_losses([raw_loss_name])
-        if len(normalized_losses) != 1:
-            raise ValueError(f"Could not parse resume checkpoint loss name: {raw_loss_name!r}")
-        checkpoint_path = raw_path.strip()
-        if not checkpoint_path:
-            raise ValueError(
-                "--resume-checkpoints entries must provide a non-empty checkpoint path. "
-                f"Received {entry!r}."
-            )
-        loss_name = normalized_losses[0]
-        if loss_name in resume_checkpoints_by_loss:
-            raise ValueError(f"Duplicate resume checkpoint entry for loss {loss_name!r}.")
-        resume_checkpoints_by_loss[loss_name] = Path(checkpoint_path)
-
-    if not resume_checkpoints_by_loss:
-        raise ValueError("--resume-checkpoints cannot be empty.")
-    return resume_checkpoints_by_loss
+    raise ValueError(
+        "--resume-checkpoints is deprecated and disabled. "
+        "Use post_train_from for weight-only post-training."
+    )
 
 
 def _resolve_round_robin_gpu_ids(parallel: int) -> list[int]:
@@ -559,35 +547,10 @@ def _preflight_runtime_config(
         raise ValueError(f"num_epochs must be positive, received {train_config.num_epochs}.")
     if not losses:
         raise ValueError("At least one loss must be requested.")
-    if train_config.resume_from is not None and resume_checkpoints_by_loss:
-        raise ValueError("--resume-from and --resume-checkpoints cannot be used together.")
     if train_config.resume_from is not None:
-        if len(losses) != 1:
-            raise ValueError("--resume-from requires running exactly one loss.")
-        if not Path(train_config.resume_from).exists():
-            raise FileNotFoundError(f"Resume checkpoint not found: {train_config.resume_from}")
+        raise ValueError(RESUME_FEATURE_DISABLED_ERROR)
     if resume_checkpoints_by_loss:
-        if len(losses) <= 1 or parallel <= 1:
-            raise ValueError("--resume-checkpoints requires shared multi-loss mode with --parallel > 1.")
-        expected_losses = set(losses)
-        provided_losses = set(resume_checkpoints_by_loss)
-        if provided_losses != expected_losses:
-            details: list[str] = []
-            missing_losses = sorted(expected_losses - provided_losses)
-            unexpected_losses = sorted(provided_losses - expected_losses)
-            if missing_losses:
-                details.append(f"missing={missing_losses}")
-            if unexpected_losses:
-                details.append(f"unexpected={unexpected_losses}")
-            raise ValueError(
-                "--resume-checkpoints must provide exactly one checkpoint per requested loss. "
-                + " ".join(details)
-            )
-        for loss_name, checkpoint_path in resume_checkpoints_by_loss.items():
-            if not checkpoint_path.exists():
-                raise FileNotFoundError(
-                    f"Resume checkpoint for loss {loss_name!r} not found: {checkpoint_path}"
-                )
+        raise ValueError(RESUME_FEATURE_DISABLED_ERROR)
 
 
 def _build_parallel_rolling_window_warning(data_config: DataConfig, parallel: int) -> str | None:
@@ -714,13 +677,11 @@ def _run_shared_dataset_worker(
     train_dataset: Dataset,
     validation_dataset: Dataset,
     test_dataset: Dataset,
-    resume_checkpoint_path: Path | None = None,
 ) -> dict[str, Any]:
     worker_train_config = replace(
         base_train_config,
         loss_name=loss_name,
         device=device_name,
-        resume_from=resume_checkpoint_path,
     )
     log_path = log_path_for_loss(paths, loss_name, state=data_config.state)
     device = resolve_device(device_name)
@@ -760,7 +721,6 @@ def run_multi_loss_training_shared_dataset(
     losses: list[str],
     *,
     parallel: int,
-    resume_checkpoints_by_loss: dict[str, Path] | None = None,
 ) -> dict[str, dict[str, Any]]:
     _validate_shared_multi_gpu_request(train_config, losses, parallel)
     ensure_output_dirs(paths)
@@ -846,11 +806,6 @@ def run_multi_loss_training_shared_dataset(
                     train_dataset=train_dataset,
                     validation_dataset=validation_dataset,
                     test_dataset=test_dataset,
-                    resume_checkpoint_path=(
-                        None
-                        if resume_checkpoints_by_loss is None
-                        else resume_checkpoints_by_loss.get(loss_name)
-                    ),
                 )
             pending_losses = set(losses)
             while pending_losses:
@@ -898,7 +853,6 @@ def _run_single_state_cli(
     paths: PathsConfig,
     parallel: int,
     losses_to_run: list[str],
-    resume_checkpoints_by_loss: dict[str, Path] | None,
     worker_mode: bool,
     model_config: ModelConfig,
 ) -> None:
@@ -913,7 +867,6 @@ def _run_single_state_cli(
             train_config,
             [loss],
             parallel=parallel,
-            resume_checkpoints_by_loss=resume_checkpoints_by_loss,
         )
         if not worker_mode:
             print(
@@ -931,7 +884,6 @@ def _run_single_state_cli(
         base_train_config,
         losses_to_run,
         parallel=parallel,
-        resume_checkpoints_by_loss=resume_checkpoints_by_loss,
     )
     if parallel > 1:
         ensure_output_dirs(paths)
@@ -946,7 +898,6 @@ def _run_single_state_cli(
             paths,
             losses_to_run,
             parallel=parallel,
-            resume_checkpoints_by_loss=resume_checkpoints_by_loss,
         )
         overview_paths = finalize_multi_loss_weight_trajectory_overviews(
             paths,
@@ -1130,7 +1081,6 @@ def _run_states_sequentially(
     paths: PathsConfig,
     parallel: int,
     losses_to_run: list[str],
-    resume_checkpoints_by_loss: dict[str, Path] | None,
     worker_mode: bool,
     model_config: ModelConfig,
     states_to_run: list[str],
@@ -1147,7 +1097,6 @@ def _run_states_sequentially(
                 paths=paths,
                 parallel=parallel,
                 losses_to_run=losses_to_run,
-                resume_checkpoints_by_loss=resume_checkpoints_by_loss,
                 worker_mode=worker_mode,
                 model_config=model_config,
             )
@@ -1166,25 +1115,22 @@ def main() -> None:
     parallel = args_dict.get("parallel", 1)
     if parallel < 1:
         raise ValueError("--parallel must be >= 1")
+    if "resume_from" in args_dict:
+        raise ValueError(
+            "--resume-from is deprecated and disabled. "
+            "Use post_train_from for weight-only post-training."
+        )
     losses_to_run = _parse_losses_args(args)
     states_to_run = _parse_states_args(args)
-    resume_checkpoints_by_loss = _parse_resume_checkpoints_arg(args)
+    _parse_resume_checkpoints_arg(args)
     worker_mode = _is_worker_mode()
     base_model_config = resolve_model_config_from_args(args)
-    if len(states_to_run) > 1 and (
-        "resume_from" in args_dict or resume_checkpoints_by_loss is not None
-    ):
-        raise ValueError(
-            "Multi-state training does not support --resume-from or --resume-checkpoints. "
-            "Resume one state at a time."
-        )
     try:
         failed_states = _run_states_sequentially(
             args,
             paths=paths,
             parallel=parallel,
             losses_to_run=losses_to_run,
-            resume_checkpoints_by_loss=resume_checkpoints_by_loss,
             worker_mode=worker_mode,
             model_config=base_model_config,
             states_to_run=states_to_run,

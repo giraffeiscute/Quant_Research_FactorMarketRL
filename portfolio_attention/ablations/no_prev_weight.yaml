@@ -1,3 +1,0 @@
-model:
-  use_prev_weight_feature: false
-  detach_prev_weight: false

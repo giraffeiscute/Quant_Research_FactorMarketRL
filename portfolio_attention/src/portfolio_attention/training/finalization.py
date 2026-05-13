@@ -41,6 +41,7 @@ def _build_checkpoint_payload(
     *,
     model,
     optimizer: torch.optim.Optimizer,
+    lr_scheduler: torch.optim.lr_scheduler.LambdaLR | None = None,
     model_config: ModelConfig,
     data_config: DataConfig,
     train_config: TrainConfig,
@@ -74,6 +75,8 @@ def _build_checkpoint_payload(
         "scaler_state": scaler_state,
         "selected_stock_ids": list(dataset.selected_stock_ids),
     }
+    if lr_scheduler is not None:
+        payload["lr_scheduler_state_dict"] = lr_scheduler.state_dict()
     if extra_metrics:
         payload["metrics"] = extra_metrics
     return payload
@@ -84,6 +87,7 @@ def _save_training_checkpoint(
     *,
     model,
     optimizer: torch.optim.Optimizer,
+    lr_scheduler: torch.optim.lr_scheduler.LambdaLR | None = None,
     model_config: ModelConfig,
     data_config: DataConfig,
     train_config: TrainConfig,
@@ -100,6 +104,7 @@ def _save_training_checkpoint(
         _build_checkpoint_payload(
             model=model,
             optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
             model_config=model_config,
             data_config=data_config,
             train_config=train_config,

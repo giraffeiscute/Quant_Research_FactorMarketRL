@@ -6,6 +6,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 from typing import Any
+import warnings
 
 import torch
 from torch.utils.data import Dataset
@@ -244,6 +245,9 @@ def _validate_resume_checkpoint(
     current_train_config = _serialize_config(train_config)
     ignored_train_keys = {"num_epochs", "device", "resume_from"}
     legacy_missing_train_config_defaults = {
+        "enable_lr_warmup_decay": False,
+        "lr_warmup_fraction": 0.05,
+        "lr_min_factor": 0.1,
         "enable_fixed_epoch_holdout_backtests": False,
         "turnover_penalty": 0.0,
         "turnover_penalty_norm": "l1",
@@ -297,6 +301,35 @@ def advance_train_loader_generator(
         torch.randperm(train_dataset_size, generator=generator)
 
 
+def _restore_lr_scheduler_state(
+    *,
+    checkpoint: dict[str, Any],
+    checkpoint_path: Path,
+    lr_scheduler: torch.optim.lr_scheduler.LambdaLR | None,
+    checkpoint_epoch: int,
+    train_batches_per_epoch: int,
+) -> None:
+    if lr_scheduler is None:
+        return
+
+    scheduler_state = checkpoint.get("lr_scheduler_state_dict")
+    if scheduler_state is not None:
+        if not isinstance(scheduler_state, dict):
+            raise ValueError(
+                f"Resume checkpoint has invalid lr_scheduler_state_dict payload: {checkpoint_path}"
+            )
+        lr_scheduler.load_state_dict(scheduler_state)
+        return
+
+    completed_steps = max(0, int(checkpoint_epoch)) * max(0, int(train_batches_per_epoch))
+    if completed_steps <= 0:
+        return
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        lr_scheduler.step(completed_steps)
+
+
 def load_resume_training_state(
     *,
     paths: PathsConfig,
@@ -306,6 +339,8 @@ def load_resume_training_state(
     dataset: PortfolioPanelDataset,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
+    lr_scheduler: torch.optim.lr_scheduler.LambdaLR | None = None,
+    train_batches_per_epoch: int = 0,
 ) -> dict[str, Any] | None:
     if train_config.resume_from is None:
         return None
@@ -363,6 +398,13 @@ def load_resume_training_state(
 
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    _restore_lr_scheduler_state(
+        checkpoint=checkpoint,
+        checkpoint_path=checkpoint_path,
+        lr_scheduler=lr_scheduler,
+        checkpoint_epoch=checkpoint_epoch,
+        train_batches_per_epoch=train_batches_per_epoch,
+    )
 
     return {
         "checkpoint_path": checkpoint_path,

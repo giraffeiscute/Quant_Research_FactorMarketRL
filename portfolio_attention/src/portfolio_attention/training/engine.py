@@ -23,7 +23,7 @@ from ..evaluation.runtime import (
 )
 from ..model.losses import build_loss, build_portfolio_objective_loss, compute_turnover_penalty
 from ..model import PortfolioAttentionModel
-from .resume import advance_train_loader_generator, load_resume_training_state
+from .lr_scheduler import build_lr_warmup_decay_scheduler, resolve_total_optimizer_steps
 from .status import TrainingStatusReporter, build_dataset_progress_callback
 from ..common.utils import (
     apply_score_mask,
@@ -49,6 +49,7 @@ class DatasetBundle:
 class TrainingRuntimeBundle:
     model: PortfolioAttentionModel
     optimizer: torch.optim.Optimizer
+    lr_scheduler: torch.optim.lr_scheduler.LambdaLR | None
     train_loader: DataLoader
     validation_loader: DataLoader
     resolved_shuffle_seed: int
@@ -392,26 +393,25 @@ def build_or_load_resume_state(
     dataset: PortfolioPanelDataset,
     model: PortfolioAttentionModel,
     optimizer: torch.optim.Optimizer,
+    lr_scheduler: torch.optim.lr_scheduler.LambdaLR | None,
     train_dataset: Dataset,
+    train_batches_per_epoch: int,
     generator: torch.Generator,
 ) -> dict[str, Any] | None:
-    resume_state = load_resume_training_state(
-        paths=paths,
-        data_config=data_config,
-        model_config=model_config,
-        train_config=train_config,
-        dataset=dataset,
-        model=model,
-        optimizer=optimizer,
+    del (
+        paths,
+        data_config,
+        model_config,
+        train_config,
+        dataset,
+        model,
+        optimizer,
+        lr_scheduler,
+        train_dataset,
+        train_batches_per_epoch,
+        generator,
     )
-    if resume_state is not None:
-        advance_train_loader_generator(
-            generator=generator,
-            train_dataset=train_dataset,
-            completed_epochs=int(resume_state["checkpoint_epoch"]),
-            shuffle_enabled=bool(data_config.shuffle_train_scenarios),
-        )
-    return resume_state
+    return None
 
 
 def _initialize_training_runtime(
@@ -427,6 +427,7 @@ def _initialize_training_runtime(
 ) -> tuple[
     PortfolioAttentionModel,
     torch.optim.Optimizer,
+    torch.optim.lr_scheduler.LambdaLR | None,
     DataLoader,
     DataLoader,
     int,
@@ -445,6 +446,21 @@ def _initialize_training_runtime(
     train_batch_size = int(data_config.train_batch_size)
     generator = torch.Generator()
     generator.manual_seed(resolved_shuffle_seed)
+    train_loader, validation_loader = build_training_dataloaders(
+        train_dataset=train_dataset,
+        validation_dataset=validation_dataset,
+        data_config=data_config,
+        train_batch_size=train_batch_size,
+        generator=generator,
+    )
+    lr_scheduler = build_lr_warmup_decay_scheduler(
+        optimizer=optimizer,
+        train_config=train_config,
+        total_steps=resolve_total_optimizer_steps(
+            num_epochs=int(train_config.num_epochs),
+            train_batches_per_epoch=len(train_loader),
+        ),
+    )
     resume_state = build_or_load_resume_state(
         paths=paths,
         data_config=data_config,
@@ -453,19 +469,15 @@ def _initialize_training_runtime(
         dataset=dataset,
         model=model,
         optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
         train_dataset=train_dataset,
-        generator=generator,
-    )
-    train_loader, validation_loader = build_training_dataloaders(
-        train_dataset=train_dataset,
-        validation_dataset=validation_dataset,
-        data_config=data_config,
-        train_batch_size=train_batch_size,
+        train_batches_per_epoch=len(train_loader),
         generator=generator,
     )
     return (
         model,
         optimizer,
+        lr_scheduler,
         train_loader,
         validation_loader,
         resolved_shuffle_seed,
@@ -488,6 +500,7 @@ def _initialize_training_runtime_bundle(
     (
         model,
         optimizer,
+        lr_scheduler,
         train_loader,
         validation_loader,
         resolved_shuffle_seed,
@@ -506,6 +519,7 @@ def _initialize_training_runtime_bundle(
     return TrainingRuntimeBundle(
         model=model,
         optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
         train_loader=train_loader,
         validation_loader=validation_loader,
         resolved_shuffle_seed=resolved_shuffle_seed,
@@ -623,6 +637,7 @@ def _run_single_train_batch(
     *,
     model: PortfolioAttentionModel,
     optimizer: torch.optim.Optimizer,
+    lr_scheduler: torch.optim.lr_scheduler.LambdaLR | None,
     raw_batch: dict[str, Any],
     device: torch.device,
     loss_name: str,
@@ -652,6 +667,8 @@ def _run_single_train_batch(
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
     optimizer.step()
+    if lr_scheduler is not None:
+        lr_scheduler.step()
     sample_count = int(batch["x_stock"].shape[0])
     return (
         float(loss.detach().cpu().item()),
@@ -665,6 +682,7 @@ def _run_training_epoch(
     *,
     model: PortfolioAttentionModel,
     optimizer: torch.optim.Optimizer,
+    lr_scheduler: torch.optim.lr_scheduler.LambdaLR | None,
     train_loader: DataLoader,
     device: torch.device,
     loss_name: str,
@@ -699,6 +717,7 @@ def _run_training_epoch(
         loss_value, mean_final_return, sample_count, shape_logged = _run_single_train_batch(
             model=model,
             optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
             raw_batch=raw_batch,
             device=device,
             loss_name=loss_name,

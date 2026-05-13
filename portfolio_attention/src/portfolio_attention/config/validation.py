@@ -18,6 +18,11 @@ VALID_DATA_STATES = ("bear", "neutral", "bull")
 # Retained for legacy checkpoint metadata handling during evaluation/analysis refresh.
 LOOKBACK_MODE_ROLLING_WINDOW = "rolling_window"
 LEGACY_LOOKBACK_MODES = frozenset({"full_history", "bounded"})
+RESUME_FROM_DISABLED_ERROR = (
+    "TrainConfig.resume_from is deprecated and disabled. "
+    "Use train.post_train_from for weight-only post-training."
+)
+POST_TRAIN_FROM_SUFFIX = ".ckpt"
 
 
 def normalize_lookback_mode(value: object) -> str:
@@ -346,6 +351,26 @@ def validate_model_config(config: ModelConfig) -> None:
 
 
 def validate_train_config(config: TrainConfig) -> None:
+    if not isinstance(config.enable_lr_warmup_decay, bool):
+        raise ValueError(
+            "TrainConfig.enable_lr_warmup_decay must be a bool, "
+            f"received {config.enable_lr_warmup_decay!r}."
+        )
+
+    config.lr_warmup_fraction = float(config.lr_warmup_fraction)
+    if not 0.0 <= config.lr_warmup_fraction < 1.0:
+        raise ValueError(
+            "TrainConfig.lr_warmup_fraction must be in [0.0, 1.0), "
+            f"received {config.lr_warmup_fraction}."
+        )
+
+    config.lr_min_factor = float(config.lr_min_factor)
+    if not 0.0 <= config.lr_min_factor <= 1.0:
+        raise ValueError(
+            "TrainConfig.lr_min_factor must be in [0.0, 1.0], "
+            f"received {config.lr_min_factor}."
+        )
+
     config.holdout_backtest_interval_epochs = int(config.holdout_backtest_interval_epochs)
     if config.holdout_backtest_interval_epochs < 0:
         raise ValueError(
@@ -395,8 +420,26 @@ def validate_train_config(config: TrainConfig) -> None:
             f"received {config.transaction_cost_rate}."
         )
 
+    if config.post_train_from is not None:
+        config.post_train_from = Path(config.post_train_from)
+        if not config.post_train_from.exists():
+            raise FileNotFoundError(
+                f"TrainConfig.post_train_from checkpoint is missing: {config.post_train_from}"
+            )
+        if not config.post_train_from.is_file():
+            raise ValueError(
+                "TrainConfig.post_train_from must be a checkpoint file path, "
+                f"received directory/non-file path: {config.post_train_from}"
+            )
+        if config.post_train_from.suffix.lower() != POST_TRAIN_FROM_SUFFIX:
+            raise ValueError(
+                "TrainConfig.post_train_from must point to a Lightning checkpoint file ending in "
+                f"{POST_TRAIN_FROM_SUFFIX!r}. Received {config.post_train_from}."
+            )
+
     if config.resume_from is not None:
         config.resume_from = Path(config.resume_from)
+        raise ValueError(RESUME_FROM_DISABLED_ERROR)
     config.rl_training = _validated_rl_training_config(config.rl_training)
 
 

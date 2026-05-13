@@ -151,6 +151,9 @@ class TrainConfig:
     learning_rate: float = 1e-4
     num_epochs: int = 150
     weight_decay: float = 3e-4
+    enable_lr_warmup_decay: bool = False
+    lr_warmup_fraction: float = 0.05
+    lr_min_factor: float = 0.1
     grad_clip_norm: float = 1.0
     grad_monitor_interval_steps: int = 0
     grad_monitor_fail_fast: bool = True
@@ -163,6 +166,8 @@ class TrainConfig:
     transaction_cost_rate: float = 0
     loss_name: Literal["", "return", "sharpe", "sortino", "mdd", "cvar"] = ""
     device: str = "cuda"
+    post_train_from: Path | None = None
+    # Deprecated: PR1 keeps this field for YAML compatibility but validation rejects non-null values.
     resume_from: Path | None = None
     rl_training: "RLTrainingConfig" = field(default_factory=lambda: RLTrainingConfig())
     def _checkpoint_name(self, stem: str, state: str | None = None) -> str:

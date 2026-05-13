@@ -48,7 +48,7 @@ _SECTION_TYPES = {
 _PATH_FIELDS = {
     "paths": {"project_dir", "output_root"},
     "data": {"scenario_dir"},
-    "train": {"resume_from"},
+    "train": {"resume_from", "post_train_from"},
 }
 
 

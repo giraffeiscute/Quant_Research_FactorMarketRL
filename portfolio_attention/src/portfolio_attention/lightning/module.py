@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,10 @@ from ..config import DataConfig, ModelConfig, TrainConfig
 from ..config.validation import validated_train_config
 from ..data.dataset import PortfolioPanelDataset
 from ..training.engine import _run_loss_step, build_training_model
+from ..training.lr_scheduler import (
+    build_lr_warmup_decay_scheduler,
+    resolve_total_optimizer_steps,
+)
 from ..training.rl_engine import run_rl_policy_step
 from .gradient_diagnostics import (
     GradientDiagnosticsCSVWriter,
@@ -319,9 +324,44 @@ class PortfolioLightningModule(pl.LightningModule):
             return float(value)
         return str(value)
 
-    def configure_optimizers(self) -> torch.optim.Optimizer:
-        return torch.optim.Adam(
+    def configure_optimizers(self) -> Any:
+        optimizer = torch.optim.Adam(
             self.model.parameters(),
             lr=float(self.train_config.learning_rate),
             weight_decay=float(self.train_config.weight_decay),
+        )
+        scheduler = build_lr_warmup_decay_scheduler(
+            optimizer=optimizer,
+            train_config=self.train_config,
+            total_steps=self._resolve_total_optimizer_steps(),
+        )
+        if scheduler is None:
+            return optimizer
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+                "name": "lr",
+            },
+        }
+
+    def _resolve_total_optimizer_steps(self) -> int:
+        try:
+            estimated_steps = int(self.trainer.estimated_stepping_batches)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            estimated_steps = 0
+        if estimated_steps > 0:
+            return estimated_steps
+
+        metadata = getattr(self.dataset, "metadata", None)
+        train_samples = int(getattr(metadata, "train_window_count", 0) or 0)
+        if train_samples <= 0:
+            train_samples = int(getattr(metadata, "num_train_scenarios", 0) or 0)
+        train_batch_size = max(1, int(self.data_config.train_batch_size))
+        train_batches_per_epoch = int(math.ceil(train_samples / train_batch_size))
+        return resolve_total_optimizer_steps(
+            num_epochs=int(self.train_config.num_epochs),
+            train_batches_per_epoch=train_batches_per_epoch,
         )

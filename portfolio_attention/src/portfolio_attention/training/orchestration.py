@@ -97,6 +97,7 @@ def _run_epoch_training_with_datasets(
     )
     model = runtime.model
     optimizer = runtime.optimizer
+    lr_scheduler = runtime.lr_scheduler
     train_loader = runtime.train_loader
     validation_loader = runtime.validation_loader
     resolved_shuffle_seed = runtime.resolved_shuffle_seed
@@ -218,6 +219,7 @@ def _run_epoch_training_with_datasets(
             train_loss, train_mean_final_return, num_train_batches, shape_logged = _run_training_epoch(
                 model=model,
                 optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
                 train_loader=train_loader,
                 device=device,
                 loss_name=train_config.loss_name,
@@ -306,6 +308,7 @@ def _run_epoch_training_with_datasets(
                 candidate_checkpoint_path,
                 model=model,
                 optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
                 model_config=model_config,
                 data_config=data_config,
                 train_config=train_config,
@@ -347,6 +350,7 @@ def _run_epoch_training_with_datasets(
                 last_checkpoint_path,
                 model=model,
                 optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
                 model_config=model_config,
                 data_config=data_config,
                 train_config=train_config,
@@ -381,6 +385,7 @@ def _run_epoch_training_with_datasets(
                 _run_monitoring_holdout_backtest_epoch(
                     model=model,
                     optimizer=optimizer,
+                    lr_scheduler=lr_scheduler,
                     model_config=model_config,
                     data_config=data_config,
                     train_config=train_config,
@@ -456,6 +461,10 @@ def run_epoch_training(
     data_config = validated_data_config(data_config)
     model_config = validated_model_config(model_config)
     train_config = validated_train_config(train_config)
+    if train_config.post_train_from is not None:
+        raise ValueError(
+            "TrainConfig.post_train_from is only supported by portfolio_attention.cli.lightning_train."
+        )
     validate_train_config_against_data_config(train_config, data_config)
     ensure_output_dirs(paths)
     save_runtime_config_artifact(

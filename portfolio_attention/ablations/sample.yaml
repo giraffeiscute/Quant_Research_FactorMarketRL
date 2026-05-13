@@ -1,2 +1,7 @@
+train:
+    learning_rate: 1e-4
+    num_epochs: 150
+    early_stopping_patience: 90
 data:
-  sample_num_stocks: 200
+  sample_num_stocks: 600
+  train_batch_size: 10

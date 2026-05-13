@@ -29,7 +29,7 @@ else:
     )
 
 import lightning.pytorch as pl
-from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 import torch
 
@@ -68,7 +68,6 @@ if __package__ is None or __package__ == "":
     )
     from portfolio_attention.model.losses import build_loss
     from portfolio_attention.cli.train import (
-        _experiment_config_from_args,
         _parse_states_args,
         build_arg_parser,
         resolve_model_config_from_args,
@@ -114,7 +113,6 @@ else:
     )
     from ..model.losses import build_loss
     from ..cli.train import (
-        _experiment_config_from_args,
         _parse_states_args,
         build_arg_parser,
         resolve_model_config_from_args,
@@ -242,7 +240,13 @@ def _validate_cli_args(args: argparse.Namespace) -> None:
     legacy_resume_checkpoints = args_dict.get("resume_checkpoints")
     if legacy_resume_checkpoints is not None:
         raise ValueError(
-            "portfolio_attention.cli.lightning_train does not support --resume-checkpoints; use a single Lightning .ckpt with --resume-from."
+            "--resume-checkpoints is deprecated and disabled. "
+            "Use post_train_from for weight-only post-training."
+        )
+    if args_dict.get("resume_from") is not None:
+        raise ValueError(
+            "--resume-from is deprecated and disabled. "
+            "Use post_train_from for weight-only post-training."
         )
 
     requested_device = args_dict.get("device")
@@ -275,10 +279,6 @@ def _resolve_single_state_runtime(
 
     if not train_config.loss_name:
         raise ValueError("portfolio_attention.cli.lightning_train requires a single --loss.")
-    if train_config.resume_from is not None and Path(train_config.resume_from).suffix != ".ckpt":
-        raise ValueError(
-            "portfolio_attention.cli.lightning_train expects --resume-from to point to a Lightning .ckpt checkpoint in this MVP."
-        )
     save_runtime_config_artifact(
         paths=paths,
         data_config=data_config,
@@ -387,6 +387,9 @@ def _build_single_state_training_stack(
         state=data_config.state,
         train_config=train_config,
     )
+    callbacks = [checkpoint_callback, early_stopping_callback, config_epoch_checkpoint_callback]
+    if bool(train_config.enable_lr_warmup_decay):
+        callbacks.append(LearningRateMonitor(logging_interval="step"))
     rl_enabled = bool(train_config.rl_training.enabled)
     csv_logger = RoundedCSVLogger(
         save_dir=str(paths.outputs_dir),
@@ -417,7 +420,7 @@ def _build_single_state_training_stack(
         strategy="ddp" if int(args.devices) > 1 else "auto",
         max_epochs=int(train_config.num_epochs),
         gradient_clip_val=float(train_config.grad_clip_norm),
-        callbacks=[checkpoint_callback, early_stopping_callback, config_epoch_checkpoint_callback],
+        callbacks=callbacks,
         logger=trainer_logger,
         default_root_dir=str(paths.outputs_dir),
         enable_progress_bar=True,
@@ -434,6 +437,67 @@ def _finish_wandb_run_if_needed(train_config: TrainConfig) -> None:
 
     if wandb.run is not None:
         wandb.finish()
+
+
+def _resolve_post_train_checkpoint_path(train_config: TrainConfig) -> Path | None:
+    if train_config.post_train_from is None:
+        return None
+    return Path(train_config.post_train_from).expanduser().resolve()
+
+
+def _extract_model_state_dict_from_lightning_checkpoint(
+    checkpoint: dict[str, object],
+    *,
+    checkpoint_path: Path,
+) -> dict[str, torch.Tensor]:
+    raw_state_dict = checkpoint.get("state_dict")
+    if not isinstance(raw_state_dict, dict):
+        raise ValueError(
+            "post_train_from checkpoint is missing dict payload 'state_dict': "
+            f"{checkpoint_path}"
+        )
+
+    model_state_dict: dict[str, torch.Tensor] = {}
+    for key, value in raw_state_dict.items():
+        if not isinstance(key, str) or not key.startswith("model."):
+            continue
+        if not isinstance(value, torch.Tensor):
+            raise ValueError(
+                "post_train_from checkpoint contains non-tensor model parameter "
+                f"for key {key!r}: {type(value).__name__}."
+            )
+        model_state_dict[key[len("model.") :]] = value
+
+    if not model_state_dict:
+        raise ValueError(
+            "post_train_from checkpoint did not contain any model-prefixed parameters "
+            f"under 'state_dict': {checkpoint_path}"
+        )
+    return model_state_dict
+
+
+def _load_post_training_model_weights(
+    *,
+    model: PortfolioLightningModule,
+    checkpoint_path: Path,
+) -> None:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if not isinstance(checkpoint, dict):
+        raise ValueError(
+            "post_train_from checkpoint must contain a dict payload: "
+            f"{checkpoint_path}"
+        )
+    model_state_dict = _extract_model_state_dict_from_lightning_checkpoint(
+        checkpoint,
+        checkpoint_path=checkpoint_path,
+    )
+    try:
+        model.model.load_state_dict(model_state_dict, strict=True)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Failed to load post_train_from model weights with strict=True from "
+            f"{checkpoint_path}: {exc}"
+        ) from exc
 
 
 def _run_single_state(args: argparse.Namespace) -> None:
@@ -456,13 +520,24 @@ def _run_single_state(args: argparse.Namespace) -> None:
             evaluation_config=evaluation_config,
             datamodule=datamodule,
         )
+        resolved_post_train_checkpoint = _resolve_post_train_checkpoint_path(train_config)
+        if resolved_post_train_checkpoint is not None:
+            _emit_lightning_console_message(
+                "Loading post-training model weights: "
+                f"post_train_from={train_config.post_train_from} "
+                f"resolved_post_train_checkpoint={resolved_post_train_checkpoint}"
+            )
+            _INTERRUPT_CONTROLLER.raise_if_interrupted()
+            _load_post_training_model_weights(
+                model=model,
+                checkpoint_path=resolved_post_train_checkpoint,
+            )
         _emit_lightning_console_message("Starting trainer.fit().")
         _INTERRUPT_CONTROLLER.raise_if_interrupted()
         try:
             trainer.fit(
                 model=model,
                 datamodule=datamodule,
-                ckpt_path=(str(train_config.resume_from) if train_config.resume_from is not None else None),
             )
         except BaseException as exc:
             if _INTERRUPT_CONTROLLER.interrupted or _exception_represents_interrupt(exc):
@@ -515,14 +590,6 @@ def main() -> None:
         _validate_cli_args(args)
 
         states_to_run = _parse_states_args(args)
-        resume_from_requested = getattr(args, "resume_from", None) is not None
-        if not resume_from_requested and len(states_to_run) > 1:
-            resume_from_requested = _experiment_config_from_args(args).train.resume_from is not None
-        if len(states_to_run) > 1 and resume_from_requested:
-            raise ValueError(
-                "Multi-run Lightning training does not support train.resume_from. "
-                "Resume one state at a time."
-            )
 
         failed_states = _run_states_sequentially(args, states_to_run)
         if failed_states:
