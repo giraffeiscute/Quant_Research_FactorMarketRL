@@ -65,7 +65,7 @@ Sector:
 '''
 import numpy as np
 
-def price_sequ(retur):#assuming the maximum of return is 0.01 at each time step
+def price_sequ(retur):#assuming the maximum of return is 0.1 at each time step
     retur=0.1*retur/np.max(np.abs(retur))
     cum_retur=np.cumsum(retur,axis=0)
     price=np.exp(cum_retur)

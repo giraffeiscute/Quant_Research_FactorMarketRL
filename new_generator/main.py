@@ -1,38 +1,26 @@
 # -*- coding: utf-8 -*-
 #main.py
 import numpy as np
-import os
 from model import Market
-from para import *
+from para import price_sequ
+from config import *
 import pandas as pd
+import os
 
-num_stock=100
-time_scale=500
-master_seed=42
 market=Market(num_stock,time_scale,is_exposure_dyna=False,master_seed=master_seed)
-'''
-WRITE YOUR FACTORS DESIGN BELOW, LIKE
-#time_corr, trend, noisy, beta_avg, beta_fluct
-
-market.factor_design('Style', 0.85,  0.00,  0.05,   0.1,   0.9)
-market.factor_design('Style', 0.85,  0.00,  0.05,   0.1,   0.9)
-'''
-market.factor_design('Style', 0.85,  0.00,  0.05,   0.1,   0.9)
+if is_alpha:
+    market.alpha_design(alpha_fluct)
+for f in factor_list:
+    market.factor_design(fac_type=f['type'],fac_time_corr=f['time_corr'],fac_trend=f['trend'],
+                         fac_noisy=f['noisy'],beta_avg=f['beta_avg'],beta_fluct=f['beta_fluct'],
+                         beta_is_sector=f['is_sec'],beta_sec_pct=f['sec_pct'])
 market.LatentBuild()
-'''
-WRITE YOUR OBSERVABLES DESIGN BELOW, LIKE
-#time_corr, trend, noisy, beta_avg, beta_fluct
-market.obs_build('Linea',u=u_return)
-
-'''
-market.obs_build('Linea',u=u_return)
-
-data_obs=np.array([obs.sequ for obs in market.obs_list])
+for obs in obs_list:
+    market.obs_build(obs_type=obs['type'],u=obs['u_vec'])
+price=price_sequ(market.obs_list[0].sequ)
+data_obs=np.array([price]+[obs.sequ for obs in market.obs_list])
 data_factor=np.array([fac.sequ for fac in market.factor_list])
 data_beta=np.array([beta.static for beta in market.exposure_list])
-
-fold_dir=r'YOUR DIRECTION'
-os.makedirs(fold_dir,exist_ok=True)
 def data_3D_parquet_save(data,fold_dir):
     num_features,time_scale,num_stock=data.shape
     total_rows=time_scale*num_stock

@@ -203,6 +203,22 @@ class Market:
         self.factor_list=[]
         self.exposure_list=[]
         self.obs_list=[]
+    def alpha_design(self,alpha_fluct,alpha_rng='global',alpha_seed=None,\
+                      alpha_time_corr=None,alpha_noisy=None,is_LowRank=False,LowRank_dim=None,LowRank_fluc=None):
+        if self.is_factor_finish==False:
+            if alpha_rng=='global':
+                alpha_rng=self.rng
+            pseudo_factor=Factor('Global',self.time_scale,0.5,0,0.5)
+            pseudo_factor.sequ=np.ones((self.time_scale))
+            self.factor_list.append(pseudo_factor)
+            exposure=Exposure(self.num_stock,0,alpha_fluct,rng=alpha_rng,seed=alpha_seed)
+            exposure.initial()
+            if self.is_exposure_dyna==True:
+                exposure.dynamics(self.time_scale,alpha_time_corr,alpha_noisy,is_LowRank=is_LowRank,\
+                                  LowRank_dim=LowRank_dim,LowRank_fluc=LowRank_fluc)
+            self.exposure_list.append(exposure)
+        else:
+            print('Initialization is Finished.')
     def factor_design(self,fac_type,fac_time_corr,fac_trend,fac_noisy,beta_avg,beta_fluct,\
                       fac_is_norm=True,fac_is_jump=False,fac_jump_prob=None,fac_jump_scale=None,\
                       fac_is_macro_trend=False,fac_macro_trend=None,fac_is_stochastic_noisy=False,\
