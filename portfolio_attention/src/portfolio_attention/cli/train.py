@@ -72,10 +72,6 @@ TERMINAL_SUMMARY_KEYS = [
 ]
 VALID_STATES = ("bear", "neutral", "bull")
 DEFAULT_LOSSES = ["return", "sharpe", "sortino", "mdd", "cvar"]
-RESUME_FEATURE_DISABLED_ERROR = (
-    "resume_from is deprecated and disabled. "
-    "Use post_train_from for weight-only post-training."
-)
 
 
 def _build_terminal_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -213,8 +209,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--early-stopping-patience", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--post-train-from", type=Path, default=argparse.SUPPRESS)
-    parser.add_argument("--resume-from", type=Path, default=argparse.SUPPRESS)
-    parser.add_argument("--resume-checkpoints", type=str, default=argparse.SUPPRESS)
     parser.add_argument(
         "--select-best-from-last-x-epochs",
         type=int,
@@ -332,8 +326,6 @@ def resolve_runtime_configs_from_args(
         train_overrides["early_stopping_patience"] = args_dict["early_stopping_patience"]
     if "post_train_from" in args_dict:
         train_overrides["post_train_from"] = args_dict["post_train_from"]
-    if "resume_from" in args_dict:
-        train_overrides["resume_from"] = args_dict["resume_from"]
     if "select_best_from_last_x_epochs" in args_dict:
         train_overrides["select_best_from_last_x_epochs"] = args_dict[
             "select_best_from_last_x_epochs"
@@ -473,17 +465,6 @@ def _parse_states_args(args: argparse.Namespace) -> list[str]:
     return [experiment_config.data.state]
 
 
-def _parse_resume_checkpoints_arg(args: argparse.Namespace) -> dict[str, Path] | None:
-    args_dict = vars(args)
-    if "resume_checkpoints" not in args_dict:
-        return None
-
-    raise ValueError(
-        "--resume-checkpoints is deprecated and disabled. "
-        "Use post_train_from for weight-only post-training."
-    )
-
-
 def _resolve_round_robin_gpu_ids(parallel: int) -> list[int]:
     if parallel <= 0:
         raise ValueError("parallel must be positive")
@@ -506,9 +487,7 @@ def _build_subprocess_cmd(loss: str, state: str, device: str | None = None) -> l
             continue
         if arg.startswith("--states=") or arg.startswith("--state="):
             continue
-        if arg.startswith("--resume-checkpoints="):
-            continue
-        if arg in {"--losses", "--parallel", "--resume-checkpoints", "--states", "--state"}:
+        if arg in {"--losses", "--parallel", "--states", "--state"}:
             skip_next = True
             continue
         if arg.startswith("--loss="):
@@ -539,7 +518,6 @@ def _preflight_runtime_config(
     losses: list[str],
     *,
     parallel: int,
-    resume_checkpoints_by_loss: dict[str, Path] | None = None,
 ) -> None:
     if not Path(data_config.scenario_dir).exists():
         raise FileNotFoundError(f"Scenario directory not found: {data_config.scenario_dir}")
@@ -547,10 +525,6 @@ def _preflight_runtime_config(
         raise ValueError(f"num_epochs must be positive, received {train_config.num_epochs}.")
     if not losses:
         raise ValueError("At least one loss must be requested.")
-    if train_config.resume_from is not None:
-        raise ValueError(RESUME_FEATURE_DISABLED_ERROR)
-    if resume_checkpoints_by_loss:
-        raise ValueError(RESUME_FEATURE_DISABLED_ERROR)
 
 
 def _build_parallel_rolling_window_warning(data_config: DataConfig, parallel: int) -> str | None:
@@ -1115,14 +1089,8 @@ def main() -> None:
     parallel = args_dict.get("parallel", 1)
     if parallel < 1:
         raise ValueError("--parallel must be >= 1")
-    if "resume_from" in args_dict:
-        raise ValueError(
-            "--resume-from is deprecated and disabled. "
-            "Use post_train_from for weight-only post-training."
-        )
     losses_to_run = _parse_losses_args(args)
     states_to_run = _parse_states_args(args)
-    _parse_resume_checkpoints_arg(args)
     worker_mode = _is_worker_mode()
     base_model_config = resolve_model_config_from_args(args)
     try:

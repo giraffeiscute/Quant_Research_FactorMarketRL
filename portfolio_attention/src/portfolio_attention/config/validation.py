@@ -18,10 +18,6 @@ VALID_DATA_STATES = ("bear", "neutral", "bull")
 # Retained for legacy checkpoint metadata handling during evaluation/analysis refresh.
 LOOKBACK_MODE_ROLLING_WINDOW = "rolling_window"
 LEGACY_LOOKBACK_MODES = frozenset({"full_history", "bounded"})
-RESUME_FROM_DISABLED_ERROR = (
-    "TrainConfig.resume_from is deprecated and disabled. "
-    "Use train.post_train_from for weight-only post-training."
-)
 POST_TRAIN_FROM_SUFFIX = ".ckpt"
 
 
@@ -437,9 +433,6 @@ def validate_train_config(config: TrainConfig) -> None:
                 f"{POST_TRAIN_FROM_SUFFIX!r}. Received {config.post_train_from}."
             )
 
-    if config.resume_from is not None:
-        config.resume_from = Path(config.resume_from)
-        raise ValueError(RESUME_FROM_DISABLED_ERROR)
     config.rl_training = _validated_rl_training_config(config.rl_training)
 
 

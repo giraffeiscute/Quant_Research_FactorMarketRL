@@ -103,6 +103,8 @@ class RoundedMetricsExperimentWriter(ExperimentWriter):
             for key, value in metrics_dict.items()
             if key not in self.excluded_metric_keys
         }
+        if not metrics:
+            return
         metrics["step"] = step
         self.metrics.append(metrics)
 

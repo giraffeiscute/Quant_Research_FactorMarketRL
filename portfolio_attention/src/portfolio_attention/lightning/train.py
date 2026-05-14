@@ -237,18 +237,6 @@ def _validate_cli_args(args: argparse.Namespace) -> None:
     if unsupported_losses is not None:
         raise ValueError("portfolio_attention.cli.lightning_train only supports --loss, not --losses.")
 
-    legacy_resume_checkpoints = args_dict.get("resume_checkpoints")
-    if legacy_resume_checkpoints is not None:
-        raise ValueError(
-            "--resume-checkpoints is deprecated and disabled. "
-            "Use post_train_from for weight-only post-training."
-        )
-    if args_dict.get("resume_from") is not None:
-        raise ValueError(
-            "--resume-from is deprecated and disabled. "
-            "Use post_train_from for weight-only post-training."
-        )
-
     requested_device = args_dict.get("device")
     if requested_device is not None:
         normalized_device = str(requested_device).strip().lower()
@@ -265,6 +253,57 @@ def _build_state_args(args: argparse.Namespace, state: str) -> argparse.Namespac
     state_args_dict = vars(args).copy()
     state_args_dict["state"] = state
     return argparse.Namespace(**state_args_dict)
+
+
+def _strip_wrapping_quotes(value: str) -> str:
+    return value.strip().strip("\"'“”‘’")
+
+
+def _parse_post_train_from_entries(raw_value: object) -> list[str]:
+    if isinstance(raw_value, (list, tuple)):
+        candidates = [str(item) for item in raw_value]
+    else:
+        candidates = [str(raw_value)]
+
+    parsed: list[str] = []
+    for candidate in candidates:
+        for token in candidate.split(","):
+            normalized = _strip_wrapping_quotes(token)
+            if normalized:
+                parsed.append(normalized)
+
+    return parsed
+
+
+def _resolve_post_train_from_overrides_by_state(
+    args: argparse.Namespace,
+    states_to_run: list[str],
+) -> dict[str, str] | None:
+    args_dict = vars(args)
+    if "post_train_from" not in args_dict:
+        return None
+
+    parsed_entries = _parse_post_train_from_entries(args_dict["post_train_from"])
+    if not parsed_entries:
+        raise ValueError(
+            "--post-train-from was provided but no valid checkpoint paths were parsed."
+        )
+
+    if len(parsed_entries) == 1:
+        shared_path = parsed_entries[0]
+        return {state: shared_path for state in states_to_run}
+
+    if len(parsed_entries) != len(states_to_run):
+        raise ValueError(
+            "When multiple --post-train-from checkpoints are provided, the number of "
+            f"checkpoints must match the number of states. states={states_to_run}, "
+            f"num_states={len(states_to_run)}, num_checkpoints={len(parsed_entries)}."
+        )
+
+    return {
+        state: checkpoint_path
+        for state, checkpoint_path in zip(states_to_run, parsed_entries)
+    }
 
 
 def _resolve_single_state_runtime(
@@ -562,9 +601,15 @@ def _run_single_state(args: argparse.Namespace) -> None:
 def _run_states_sequentially(args: argparse.Namespace, states_to_run: list[str]) -> list[str]:
     failed_states: list[str] = []
     total_states = len(states_to_run)
+    post_train_from_overrides = _resolve_post_train_from_overrides_by_state(
+        args,
+        states_to_run,
+    )
     for index, state in enumerate(states_to_run, start=1):
         _INTERRUPT_CONTROLLER.raise_if_interrupted()
         state_args = _build_state_args(args, state)
+        if post_train_from_overrides is not None:
+            setattr(state_args, "post_train_from", post_train_from_overrides[state])
         if total_states > 1 and _is_global_rank_zero():
             print(f"\n=== Running state {index}/{total_states}: {state} ===", flush=True)
         try:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from typing import Any
 
@@ -40,19 +39,6 @@ KEY_OVERVIEW_LOSS_ORDER = "overview_loss_order"
 KEY_SCENARIO_ARTIFACTS = "scenario_artifacts"
 KEY_SCENARIO_ID = "scenario_id"
 KEY_WEIGHT_TRAJECTORY_OVERVIEW_CHART = "weight_trajectory_overview_chart"
-
-RESUME_FLOAT_MATCH_KEYS = (
-    KEY_TRAIN_LOSS,
-    KEY_TRAIN_MEAN_FINAL_RETURN,
-    KEY_VAL_LOSS,
-    KEY_VAL_MEAN_FINAL_RETURN,
-)
-RESUME_EXACT_MATCH_KEYS = (
-    KEY_HOLDOUT_BACKTEST_RAN,
-    KEY_HOLDOUT_BACKTEST_EPOCH,
-    KEY_HOLDOUT_BACKTEST_OUTPUT_DIR,
-    KEY_MONITORING_CHECKPOINT_PATH,
-)
 
 
 def validate_history_list(history: Any) -> list[dict[str, Any]]:
@@ -269,37 +255,3 @@ def update_payload_overview_paths(
             or changed
         )
     return changed
-
-
-def resume_metric_matches(history_value: Any, checkpoint_value: Any) -> bool:
-    try:
-        return math.isclose(float(history_value), float(checkpoint_value), rel_tol=1e-9, abs_tol=1e-9)
-    except (TypeError, ValueError):
-        return history_value == checkpoint_value
-
-
-def resume_history_item_matches_checkpoint(
-    history_item: dict[str, Any],
-    checkpoint_metrics: dict[str, Any],
-    *,
-    history_epoch: int | None,
-) -> bool:
-    compared_metric = False
-    for key in RESUME_FLOAT_MATCH_KEYS:
-        if key not in checkpoint_metrics or key not in history_item:
-            continue
-        compared_metric = True
-        if not resume_metric_matches(history_item.get(key), checkpoint_metrics.get(key)):
-            return False
-
-    for key in RESUME_EXACT_MATCH_KEYS:
-        if key not in checkpoint_metrics or key not in history_item:
-            continue
-        compared_metric = True
-        if history_item.get(key) != checkpoint_metrics.get(key):
-            return False
-
-    if not compared_metric and KEY_EPOCH in checkpoint_metrics:
-        if not resume_metric_matches(history_epoch, checkpoint_metrics.get(KEY_EPOCH)):
-            return False
-    return True

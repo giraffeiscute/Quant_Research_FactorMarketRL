@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 from torch.distributions import Dirichlet
 
 from ..common.utils import apply_score_mask
 from ..config import DataConfig, TrainConfig
 from ..evaluation.metrics import apply_transaction_cost_to_returns
 from ..model import PortfolioAttentionModel
+from ..model.allocation_distribution import logits_to_dirichlet_alpha
 from ..model.reward import (
     compute_dsr_day_reward,
     compute_dsr_warmup_stats,
@@ -62,10 +62,10 @@ def run_rl_policy_step(
             f"Received scored_returns={tuple(scored_returns.shape)} rolling_horizon_days={horizon_days}."
         )
 
-    alpha = torch.clamp(
-        F.softplus(scored_logits[:, -1, :]),
-        min=float(train_config.rl_training.alpha_min),
-        max=float(train_config.rl_training.alpha_max),
+    alpha = logits_to_dirichlet_alpha(
+        scored_logits[:, -1, :],
+        alpha_min=float(train_config.rl_training.alpha_min),
+        alpha_max=float(train_config.rl_training.alpha_max),
     )
     dist = Dirichlet(alpha)
     group_size = int(train_config.rl_training.group_size)

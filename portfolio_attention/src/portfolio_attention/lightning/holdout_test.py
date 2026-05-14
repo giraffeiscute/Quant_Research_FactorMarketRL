@@ -465,9 +465,6 @@ def _validate_cli_args(args: argparse.Namespace) -> None:
     if args_dict.get("states") is not None:
         raise ValueError("portfolio_attention.cli.holdout_test only supports --state, not --states.")
 
-    if args_dict.get("resume_checkpoints") is not None:
-        raise ValueError("portfolio_attention.cli.holdout_test does not support --resume-checkpoints.")
-
     if int(args_dict.get("devices", 1)) <= 0:
         raise ValueError("--devices must be positive.")
 

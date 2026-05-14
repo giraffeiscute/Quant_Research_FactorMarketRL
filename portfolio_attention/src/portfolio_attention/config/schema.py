@@ -167,8 +167,6 @@ class TrainConfig:
     loss_name: Literal["", "return", "sharpe", "sortino", "mdd", "cvar"] = ""
     device: str = "cuda"
     post_train_from: Path | None = None
-    # Deprecated: PR1 keeps this field for YAML compatibility but validation rejects non-null values.
-    resume_from: Path | None = None
     rl_training: "RLTrainingConfig" = field(default_factory=lambda: RLTrainingConfig())
     def _checkpoint_name(self, stem: str, state: str | None = None) -> str:
         prefix = f"{state}_" if state else ""

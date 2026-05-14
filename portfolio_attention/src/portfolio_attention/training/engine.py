@@ -54,7 +54,7 @@ class TrainingRuntimeBundle:
     validation_loader: DataLoader
     resolved_shuffle_seed: int
     train_batch_size: int
-    resume_state: dict[str, Any] | None
+    runtime_state: dict[str, Any] | None
 
 
 def _move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
@@ -384,7 +384,7 @@ def build_training_dataloaders(
     return train_loader, validation_loader
 
 
-def build_or_load_resume_state(
+def build_training_runtime_state(
     *,
     paths: PathsConfig,
     data_config: DataConfig,
@@ -461,7 +461,7 @@ def _initialize_training_runtime(
             train_batches_per_epoch=len(train_loader),
         ),
     )
-    resume_state = build_or_load_resume_state(
+    runtime_state = build_training_runtime_state(
         paths=paths,
         data_config=data_config,
         model_config=model_config,
@@ -482,7 +482,7 @@ def _initialize_training_runtime(
         validation_loader,
         resolved_shuffle_seed,
         train_batch_size,
-        resume_state,
+        runtime_state,
     )
 
 
@@ -505,7 +505,7 @@ def _initialize_training_runtime_bundle(
         validation_loader,
         resolved_shuffle_seed,
         train_batch_size,
-        resume_state,
+        runtime_state,
     ) = _initialize_training_runtime(
         paths=paths,
         data_config=data_config,
@@ -524,7 +524,7 @@ def _initialize_training_runtime_bundle(
         validation_loader=validation_loader,
         resolved_shuffle_seed=resolved_shuffle_seed,
         train_batch_size=train_batch_size,
-        resume_state=resume_state,
+        runtime_state=runtime_state,
     )
 
 
@@ -551,7 +551,7 @@ def _prepare_training_runtime(
     if initialization_lock is None:
         _write_initialization_status(
             "initializing_runtime",
-            "Preparing model, optimizer, DataLoaders, and resume state.",
+            "Preparing model, optimizer, DataLoaders, and runtime state.",
         )
         return _initialize_training_runtime_bundle(
             paths=paths,
@@ -571,7 +571,7 @@ def _prepare_training_runtime(
     with initialization_lock:
         _write_initialization_status(
             "initializing_runtime",
-            "Preparing model, optimizer, DataLoaders, and resume state.",
+            "Preparing model, optimizer, DataLoaders, and runtime state.",
         )
         return _initialize_training_runtime_bundle(
             paths=paths,

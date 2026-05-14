@@ -102,7 +102,7 @@ def _run_epoch_training_with_datasets(
     validation_loader = runtime.validation_loader
     resolved_shuffle_seed = runtime.resolved_shuffle_seed
     train_batch_size = runtime.train_batch_size
-    resume_state = runtime.resume_state
+    initialization_state = runtime.runtime_state
 
     append_log(
         log_path,
@@ -139,29 +139,36 @@ def _run_epoch_training_with_datasets(
         ),
     )
 
-    if resume_state is not None:
-        append_log(
-            log_path,
-            (
-                "Resuming training from checkpoint: "
-                f"path={resume_state['checkpoint_path']} "
-                f"checkpoint_epoch={resume_state['checkpoint_epoch']} "
-                f"target_num_epochs={train_config.num_epochs}."
-            ),
-        )
-
     global_best_val_loss = (
-        float(resume_state["global_best_val_loss"]) if resume_state is not None else float("inf")
+        float(initialization_state["global_best_val_loss"])
+        if initialization_state is not None
+        else float("inf")
     )
-    epochs_without_improvement = int(resume_state["epochs_without_improvement"]) if resume_state is not None else 0
-    epochs_completed = int(resume_state["checkpoint_epoch"]) if resume_state is not None else 0
-    initial_best_epoch = int(resume_state["current_window_best_epoch"]) if resume_state is not None else None
+    epochs_without_improvement = (
+        int(initialization_state["epochs_without_improvement"])
+        if initialization_state is not None
+        else 0
+    )
+    epochs_completed = (
+        int(initialization_state["checkpoint_epoch"])
+        if initialization_state is not None
+        else 0
+    )
+    initial_best_epoch = (
+        int(initialization_state["current_window_best_epoch"])
+        if initialization_state is not None
+        else None
+    )
     initial_best_val_loss = (
-        float(resume_state["current_window_best_val_loss"]) if resume_state is not None else None
+        float(initialization_state["current_window_best_val_loss"])
+        if initialization_state is not None
+        else None
     )
-    starting_epoch = int(resume_state["next_epoch"]) if resume_state is not None else 1
+    starting_epoch = int(initialization_state["next_epoch"]) if initialization_state is not None else 1
     epoch_selection_records: list[dict[str, Any]] = []
-    history: list[dict[str, Any]] = list(resume_state["history"]) if resume_state is not None else []
+    history: list[dict[str, Any]] = (
+        list(initialization_state["history"]) if initialization_state is not None else []
+    )
     shape_logged = False
     completed_epoch_seconds_total = 0.0
     validation_runtime_metadata = _build_validation_rolling_metadata(
@@ -199,11 +206,7 @@ def _run_epoch_training_with_datasets(
         global_best_val_loss=global_best_val_loss if math.isfinite(global_best_val_loss) else None,
         epochs_without_improvement=epochs_without_improvement,
         phase=current_phase,
-        message=(
-            f"Resume checkpoint loaded from epoch {epochs_completed}; waiting for epoch {starting_epoch}."
-            if resume_state is not None
-            else dataset_ready_message
-        ),
+        message=dataset_ready_message,
     )
 
     checkpoint_state = data_config.state
