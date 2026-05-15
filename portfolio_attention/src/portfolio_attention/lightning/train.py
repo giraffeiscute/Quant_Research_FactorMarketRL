@@ -428,7 +428,7 @@ def _build_single_state_training_stack(
     )
     callbacks = [checkpoint_callback, early_stopping_callback, config_epoch_checkpoint_callback]
     if bool(train_config.enable_lr_warmup_decay):
-        callbacks.append(LearningRateMonitor(logging_interval="step"))
+        callbacks.append(LearningRateMonitor(logging_interval="epoch"))
     rl_enabled = bool(train_config.rl_training.enabled)
     csv_logger = RoundedCSVLogger(
         save_dir=str(paths.outputs_dir),

@@ -5,6 +5,7 @@ from .allocation_distribution import (
     AllocationDistributionResult,
     dirichlet_mean_from_logits,
     logits_to_dirichlet_alpha,
+    logits_to_rl_post_train_dirichlet_alpha,
 )
 from .allocation_path import AllocationResult, AllocationSmoother
 from .cross_sectional import (
@@ -26,6 +27,7 @@ __all__ = [
     "CrossSectionalScoreResult",
     "dirichlet_mean_from_logits",
     "logits_to_dirichlet_alpha",
+    "logits_to_rl_post_train_dirichlet_alpha",
     "MarketTemporalEncoder",
     "MLPCrossSectionalScorer",
     "MLPPortfolioHead",

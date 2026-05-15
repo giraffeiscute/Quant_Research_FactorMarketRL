@@ -10,8 +10,11 @@ import torch.nn.functional as F
 from torch import nn
 
 
-DEFAULT_DIRICHLET_ALPHA_MIN = 0.5
-DEFAULT_DIRICHLET_ALPHA_MAX = 30.0
+DEFAULT_DIRICHLET_ALPHA_MIN = 1e-4
+DEFAULT_DIRICHLET_LOGIT_SCALE = 3.0
+DEFAULT_RL_POST_TRAIN_EVIDENCE_SCALE = 0.5
+DEFAULT_RL_POST_TRAIN_DIRICHLET_ALPHA_MIN = 0.05
+DEFAULT_RL_POST_TRAIN_DIRICHLET_ALPHA_MAX = 50.0
 
 
 @dataclass
@@ -25,11 +28,32 @@ def logits_to_dirichlet_alpha(
     logits: torch.Tensor,
     *,
     alpha_min: float = DEFAULT_DIRICHLET_ALPHA_MIN,
-    alpha_max: float = DEFAULT_DIRICHLET_ALPHA_MAX,
+    logit_scale: float = DEFAULT_DIRICHLET_LOGIT_SCALE,
 ) -> torch.Tensor:
-    """Convert allocation logits to bounded Dirichlet concentration parameters."""
+    """Convert allocation logits to ordinary-training Dirichlet concentration parameters."""
+    alpha_min = float(alpha_min)
+    logit_scale = float(logit_scale)
+    if alpha_min <= 0.0:
+        raise ValueError(f"alpha_min must be positive, received {alpha_min}.")
+    if logit_scale <= 0.0:
+        raise ValueError(f"logit_scale must be positive, received {logit_scale}.")
+    return F.softplus(logit_scale * logits) + alpha_min
+
+
+def logits_to_rl_post_train_dirichlet_alpha(
+    logits: torch.Tensor,
+    *,
+    alpha_min: float = DEFAULT_RL_POST_TRAIN_DIRICHLET_ALPHA_MIN,
+    alpha_max: float = DEFAULT_RL_POST_TRAIN_DIRICHLET_ALPHA_MAX,
+    logit_scale: float = DEFAULT_DIRICHLET_LOGIT_SCALE,
+    evidence_scale: float = DEFAULT_RL_POST_TRAIN_EVIDENCE_SCALE,
+) -> torch.Tensor:
+    """Convert allocation logits to bounded RL post-training Dirichlet parameters."""
     alpha_min = float(alpha_min)
     alpha_max = float(alpha_max)
+    logit_scale = float(logit_scale)
+    evidence_scale = float(evidence_scale)
+
     if alpha_min <= 0.0:
         raise ValueError(f"alpha_min must be positive, received {alpha_min}.")
     if alpha_max <= 0.0:
@@ -39,20 +63,27 @@ def logits_to_dirichlet_alpha(
             "alpha_min must be <= alpha_max, "
             f"received alpha_min={alpha_min} alpha_max={alpha_max}."
         )
-    return torch.clamp(F.softplus(logits), min=alpha_min, max=alpha_max)
+    if logit_scale <= 0.0:
+        raise ValueError(f"logit_scale must be positive, received {logit_scale}.")
+    if evidence_scale <= 0.0:
+        raise ValueError(f"evidence_scale must be positive, received {evidence_scale}.")
+
+    alpha = evidence_scale * F.softplus(logit_scale * logits)
+
+    return torch.clamp(alpha, min=alpha_min, max=alpha_max)
 
 
 def dirichlet_mean_from_logits(
     logits: torch.Tensor,
     *,
     alpha_min: float = DEFAULT_DIRICHLET_ALPHA_MIN,
-    alpha_max: float = DEFAULT_DIRICHLET_ALPHA_MAX,
+    logit_scale: float = DEFAULT_DIRICHLET_LOGIT_SCALE,
     eps: float = 1e-8,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     alpha = logits_to_dirichlet_alpha(
         logits,
         alpha_min=alpha_min,
-        alpha_max=alpha_max,
+        logit_scale=logit_scale,
     )
     mean = alpha / alpha.sum(dim=-1, keepdim=True).clamp_min(float(eps))
     return mean, alpha
@@ -99,7 +130,7 @@ class AllocationDistribution(nn.Module):
         *,
         inference_allocation_mode: str = "softmax",
         dirichlet_alpha_min: float = DEFAULT_DIRICHLET_ALPHA_MIN,
-        dirichlet_alpha_max: float = DEFAULT_DIRICHLET_ALPHA_MAX,
+        dirichlet_logit_scale: float = DEFAULT_DIRICHLET_LOGIT_SCALE,
         eps: float = 1e-8,
     ) -> None:
         super().__init__()
@@ -114,22 +145,16 @@ class AllocationDistribution(nn.Module):
         if self.eps <= 0.0:
             raise ValueError(f"eps must be positive, received {self.eps}.")
         self.dirichlet_alpha_min = float(dirichlet_alpha_min)
-        self.dirichlet_alpha_max = float(dirichlet_alpha_max)
+        self.dirichlet_logit_scale = float(dirichlet_logit_scale)
         if self.dirichlet_alpha_min <= 0.0:
             raise ValueError(
                 "dirichlet_alpha_min must be positive, "
                 f"received {self.dirichlet_alpha_min}."
             )
-        if self.dirichlet_alpha_max <= 0.0:
+        if self.dirichlet_logit_scale <= 0.0:
             raise ValueError(
-                "dirichlet_alpha_max must be positive, "
-                f"received {self.dirichlet_alpha_max}."
-            )
-        if self.dirichlet_alpha_min > self.dirichlet_alpha_max:
-            raise ValueError(
-                "dirichlet_alpha_min must be <= dirichlet_alpha_max, "
-                f"received dirichlet_alpha_min={self.dirichlet_alpha_min} "
-                f"dirichlet_alpha_max={self.dirichlet_alpha_max}."
+                "dirichlet_logit_scale must be positive, "
+                f"received {self.dirichlet_logit_scale}."
             )
 
     def _deterministic_allocation(
@@ -142,7 +167,7 @@ class AllocationDistribution(nn.Module):
             return dirichlet_mean_from_logits(
                 logits,
                 alpha_min=self.dirichlet_alpha_min,
-                alpha_max=self.dirichlet_alpha_max,
+                logit_scale=self.dirichlet_logit_scale,
                 eps=self.eps,
             )
         raise ValueError(

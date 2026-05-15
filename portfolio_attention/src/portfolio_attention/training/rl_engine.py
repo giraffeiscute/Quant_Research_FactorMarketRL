@@ -12,7 +12,7 @@ from ..common.utils import apply_score_mask
 from ..config import DataConfig, TrainConfig
 from ..evaluation.metrics import apply_transaction_cost_to_returns
 from ..model import PortfolioAttentionModel
-from ..model.allocation_distribution import logits_to_dirichlet_alpha
+from ..model.allocation_distribution import logits_to_rl_post_train_dirichlet_alpha
 from ..model.reward import (
     compute_dsr_day_reward,
     compute_dsr_warmup_stats,
@@ -62,7 +62,7 @@ def run_rl_policy_step(
             f"Received scored_returns={tuple(scored_returns.shape)} rolling_horizon_days={horizon_days}."
         )
 
-    alpha = logits_to_dirichlet_alpha(
+    alpha = logits_to_rl_post_train_dirichlet_alpha(
         scored_logits[:, -1, :],
         alpha_min=float(train_config.rl_training.alpha_min),
         alpha_max=float(train_config.rl_training.alpha_max),
