@@ -200,6 +200,33 @@ def compute_dsr_day_reward(
     return reward
 
 
+def compute_rolling_sharpe_reward(
+    portfolio_returns: torch.Tensor,
+    *,
+    eps: float = 1e-6,
+    reward_clip: float | None = 5.0,
+) -> torch.Tensor:
+    """Compute per-path rolling-window Sharpe reward with positive reward sign."""
+    scored_returns = _coerce_portfolio_returns(portfolio_returns)
+    if int(scored_returns.shape[1]) < 2:
+        raise ValueError(
+            "rolling Sharpe reward requires at least two time steps, "
+            f"received {int(scored_returns.shape[1])}."
+        )
+    if float(eps) <= 0.0:
+        raise ValueError(f"eps must be > 0, received {eps}.")
+
+    mean_ret = scored_returns.mean(dim=1)
+    std_ret = scored_returns.std(dim=1, unbiased=True)
+    reward = mean_ret / (std_ret + float(eps))
+    if reward_clip is not None:
+        clip_value = float(reward_clip)
+        if clip_value <= 0.0:
+            raise ValueError(f"reward_clip must be > 0 when set, received {reward_clip}.")
+        reward = torch.clamp(reward, min=-clip_value, max=clip_value)
+    return reward
+
+
 def compute_group_relative_advantage(
     rewards: torch.Tensor,
     *,

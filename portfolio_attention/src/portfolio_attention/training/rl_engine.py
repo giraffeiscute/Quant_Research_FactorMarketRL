@@ -18,6 +18,7 @@ from ..model.reward import (
     compute_dsr_warmup_stats,
     compute_group_relative_advantage,
     compute_policy_gradient_objective,
+    compute_rolling_sharpe_reward,
 )
 
 
@@ -79,11 +80,6 @@ def run_rl_policy_step(
             scored_turnover,
             transaction_cost_rate=float(train_config.transaction_cost_rate),
         )
-        warmup_A0, warmup_B0 = compute_dsr_warmup_stats(
-            net_scored_returns,
-            rolling_horizon_days=horizon_days,
-        )
-
         sampled_stock_weights = sampled_actions[..., :-1]
         reward_stock_returns = scored_r_stock[:, -1, :].unsqueeze(0)
         gross_reward_return = (sampled_stock_weights * reward_stock_returns).sum(dim=-1)
@@ -102,14 +98,27 @@ def run_rl_policy_step(
             (warmup_path, sampled_net_reward_return.unsqueeze(-1)),
             dim=-1,
         )
-        rewards = compute_dsr_day_reward(
-            sampled_prediction_returns.reshape(-1, horizon_days),
-            rolling_horizon_days=horizon_days,
-            A0=warmup_A0.unsqueeze(0).expand(group_size, -1).reshape(-1),
-            B0=warmup_B0.unsqueeze(0).expand(group_size, -1).reshape(-1),
-            dsr_var_eps=float(train_config.rl_training.dsr_var_eps),
-            reward_clip=float(train_config.rl_training.reward_clip),
-        ).reshape(group_size, -1)
+        reward_type = str(train_config.rl_training.reward_type).strip().lower()
+        if reward_type == "dsr_day_last":
+            warmup_A0, warmup_B0 = compute_dsr_warmup_stats(
+                net_scored_returns,
+                rolling_horizon_days=horizon_days,
+            )
+            rewards = compute_dsr_day_reward(
+                sampled_prediction_returns.reshape(-1, horizon_days),
+                rolling_horizon_days=horizon_days,
+                A0=warmup_A0.unsqueeze(0).expand(group_size, -1).reshape(-1),
+                B0=warmup_B0.unsqueeze(0).expand(group_size, -1).reshape(-1),
+                dsr_var_eps=float(train_config.rl_training.dsr_var_eps),
+                reward_clip=float(train_config.rl_training.reward_clip),
+            ).reshape(group_size, -1)
+        elif reward_type == "rolling_sharpe":
+            rewards = compute_rolling_sharpe_reward(
+                sampled_prediction_returns.reshape(-1, horizon_days),
+                reward_clip=float(train_config.rl_training.reward_clip),
+            ).reshape(group_size, -1)
+        else:
+            raise ValueError(f"Unsupported RL reward_type: {reward_type!r}.")
         advantages = compute_group_relative_advantage(rewards, group_dim=0)
     action_dim = int(alpha.shape[-1])
     entropy_per_dim = entropy / float(action_dim)

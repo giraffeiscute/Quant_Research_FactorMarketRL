@@ -467,9 +467,11 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
         )
 
     config.reward_type = str(config.reward_type).strip().lower()  # type: ignore[assignment]
-    if config.reward_type != "dsr_day_last":
+    valid_reward_types = {"dsr_day_last", "rolling_sharpe"}
+    if config.reward_type not in valid_reward_types:
         raise ValueError(
-            "TrainConfig.rl_training.reward_type must be 'dsr_day_last', "
+            "TrainConfig.rl_training.reward_type must be one of "
+            f"{sorted(valid_reward_types)}, "
             f"received {config.reward_type!r}."
         )
 

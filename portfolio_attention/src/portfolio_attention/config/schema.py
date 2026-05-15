@@ -205,7 +205,7 @@ class RLTrainingConfig:
 
     enabled: bool = False
     algorithm: Literal["grpo_like"] = "grpo_like"
-    reward_type: Literal["dsr_day_last"] = "dsr_day_last"
+    reward_type: Literal["dsr_day_last", "rolling_sharpe"] = "dsr_day_last"
     group_size: int = 10
     warmup_allocation_mode: Literal["deterministic_mean"] = "deterministic_mean"
     dsr_var_eps: float = 1e-8
