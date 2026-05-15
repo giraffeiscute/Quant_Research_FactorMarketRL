@@ -10,3 +10,5 @@ __pycache__/
 
 # Large font file
 /mt toy model/SourceHanSansSC-Regular.otf
+
+/new_generator/
