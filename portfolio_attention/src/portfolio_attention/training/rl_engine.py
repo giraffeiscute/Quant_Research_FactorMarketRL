@@ -18,6 +18,7 @@ from ..model.reward import (
     compute_dsr_warmup_stats,
     compute_group_relative_advantage,
     compute_policy_gradient_objective,
+    compute_return_reward,
     compute_rolling_sharpe_reward,
 )
 
@@ -115,6 +116,11 @@ def run_rl_policy_step(
             ).reshape(group_size, -1)
         elif reward_type == "rolling_sharpe":
             rewards = compute_rolling_sharpe_reward(
+                sampled_prediction_returns.reshape(-1, horizon_days),
+                reward_clip=float(train_config.rl_training.reward_clip),
+            ).reshape(group_size, -1)
+        elif reward_type == "return":
+            rewards = compute_return_reward(
                 sampled_prediction_returns.reshape(-1, horizon_days),
                 reward_clip=float(train_config.rl_training.reward_clip),
             ).reshape(group_size, -1)

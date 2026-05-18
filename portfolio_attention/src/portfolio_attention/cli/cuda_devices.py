@@ -61,9 +61,9 @@ def resolve_lightning_cuda_devices(
     devices: str | int | list[int] | tuple[int, ...] | None,
 ) -> tuple[int | list[int], list[int]]:
     if devices is None:
-        return 1, [0]
+        return [0], [0]
     if isinstance(devices, bool):
-        raise ValueError("--devices must be a positive count or comma-separated GPU ids.")
+        raise ValueError("--devices must be GPU ids or a comma-separated GPU id list.")
     if isinstance(devices, int):
         requested_count = int(devices)
         if requested_count <= 0:
@@ -73,19 +73,11 @@ def resolve_lightning_cuda_devices(
         normalized_value = devices.strip()
         if not normalized_value:
             raise ValueError("--devices cannot be empty.")
-        if "," in normalized_value:
-            explicit_gpu_ids = parse_cuda_gpu_ids(normalized_value)
-            return explicit_gpu_ids, list(explicit_gpu_ids)
-        try:
-            requested_count = int(normalized_value)
-        except ValueError as exc:
-            raise ValueError("--devices must be a positive count or comma-separated GPU ids.") from exc
-        if requested_count <= 0:
-            raise ValueError("--devices must be positive when provided as a count.")
-        return requested_count, list(range(requested_count))
+        explicit_gpu_ids = parse_cuda_gpu_ids(normalized_value)
+        return explicit_gpu_ids, list(explicit_gpu_ids)
     if isinstance(devices, (list, tuple)):
         if not all(isinstance(device, int) and not isinstance(device, bool) for device in devices):
             raise ValueError("--devices explicit GPU ids must be integers.")
         explicit_gpu_ids = [int(device) for device in devices]
         return explicit_gpu_ids, normalize_cuda_gpu_ids(explicit_gpu_ids)
-    raise ValueError("--devices must be a positive count or comma-separated GPU ids.")
+    raise ValueError("--devices must be GPU ids or a comma-separated GPU id list.")

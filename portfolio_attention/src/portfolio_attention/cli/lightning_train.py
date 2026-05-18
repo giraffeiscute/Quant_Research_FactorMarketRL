@@ -17,8 +17,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--devices",
         type=str,
-        default="1",
-        help="Local GPU selection: count (e.g., '2') or explicit ids (e.g., '0,1').",
+        default="0",
+        help="Local GPU ids for Lightning training (for example: '0' or '0,1').",
     )
     parser.add_argument(
         "--num-workers",

@@ -227,6 +227,22 @@ def compute_rolling_sharpe_reward(
     return reward
 
 
+def compute_return_reward(
+    portfolio_returns: torch.Tensor,
+    *,
+    reward_clip: float | None = 5.0,
+) -> torch.Tensor:
+    """Compute final-day simple return reward with positive reward sign."""
+    scored_returns = _coerce_portfolio_returns(portfolio_returns)
+    reward = scored_returns[:, -1]
+    if reward_clip is not None:
+        clip_value = float(reward_clip)
+        if clip_value <= 0.0:
+            raise ValueError(f"reward_clip must be > 0 when set, received {reward_clip}.")
+        reward = torch.clamp(reward, min=-clip_value, max=clip_value)
+    return reward
+
+
 def compute_group_relative_advantage(
     rewards: torch.Tensor,
     *,
