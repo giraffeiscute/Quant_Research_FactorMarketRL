@@ -227,21 +227,6 @@ class PortfolioLightningModule(pl.LightningModule):
             metrics["val_cash"],
             prog_bar=False,
         )
-        self._log_validation_epoch_metric(
-            "validation_stocks_bought",
-            metrics["validation_stocks_bought"],
-            prog_bar=False,
-        )
-        self._log_validation_epoch_metric(
-            "validation_average_turnover",
-            metrics["validation_average_turnover"],
-            prog_bar=False,
-        )
-        self._log_validation_epoch_metric(
-            "validation_mean_cash_weight",
-            metrics["validation_mean_cash_weight"],
-            prog_bar=False,
-        )
 
     def _log_train_epoch_metric(
         self,

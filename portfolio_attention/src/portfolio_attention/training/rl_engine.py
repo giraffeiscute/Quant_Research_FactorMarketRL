@@ -67,6 +67,7 @@ def run_rl_policy_step(
         scored_logits[:, -1, :],
         alpha_min=float(train_config.rl_training.alpha_min),
         alpha_max=float(train_config.rl_training.alpha_max),
+        evidence_scale=float(train_config.rl_training.rl_post_train_evidence_scale),
     )
     dist = Dirichlet(alpha)
     group_size = int(train_config.rl_training.group_size)

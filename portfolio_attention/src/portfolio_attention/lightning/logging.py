@@ -11,9 +11,8 @@ import torch
 
 
 CSV_METRIC_DECIMAL_PLACES = 8
-VALIDATION_STOCKS_BOUGHT_DECIMAL_PLACES = 1
-VAL_STOCK_METRIC_KEYS = {"validation_stocks_bought"}
-VAL_STOCK_METRIC_KEY = "val_stock"
+VAL_STOCK_METRIC_DECIMAL_PLACES = 1
+VAL_STOCK_METRIC_KEYS = {"val_stock"}
 PREFERRED_METRIC_KEY_ORDER = [
     "epoch",
     "step",
@@ -27,9 +26,6 @@ PREFERRED_METRIC_KEY_ORDER = [
     "val_OT",
     "val_stock",
     "val_cash",
-    "validation_stocks_bought",
-    "validation_average_turnover",
-    "validation_mean_cash_weight",
 ]
 RL_PREFERRED_METRIC_KEY_ORDER = [
     "epoch",
@@ -53,9 +49,6 @@ RL_PREFERRED_METRIC_KEY_ORDER = [
     "val_OT",
     "val_stock",
     "val_cash",
-    "validation_stocks_bought",
-    "validation_average_turnover",
-    "validation_mean_cash_weight",
 ]
 
 
@@ -87,7 +80,7 @@ class RoundedMetricsExperimentWriter(ExperimentWriter):
             value = value.item()
         if isinstance(value, float):
             decimal_places = (
-                VALIDATION_STOCKS_BOUGHT_DECIMAL_PLACES
+                VAL_STOCK_METRIC_DECIMAL_PLACES
                 if key in VAL_STOCK_METRIC_KEYS
                 else self.decimal_places
             )

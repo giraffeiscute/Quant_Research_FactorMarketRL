@@ -219,6 +219,7 @@ class PortfolioAttentionModel(nn.Module):
                 detach_prev_weight=self.detach_prev_weight,
                 use_prev_weight_feature=self.use_prev_weight_feature,
                 inference_allocation_mode=self.inference_allocation_mode,
+                dirichlet_logit_scale=float(config.dirichlet_logit_scale),
             )
         elif self.stock_cross_sectional_encoder_type == "mlp":
             self.cross_sectional_scorer = MLPCrossSectionalScorer(
@@ -229,6 +230,7 @@ class PortfolioAttentionModel(nn.Module):
                 dropout=config.dropout,
                 uses_post_temporal_identity=self.uses_post_temporal_identity,
                 inference_allocation_mode=self.inference_allocation_mode,
+                dirichlet_logit_scale=float(config.dirichlet_logit_scale),
             )
         else:
             raise ValueError(

@@ -42,14 +42,8 @@ if __package__ is None or __package__ == "":
         _destroy_distributed_process_group_if_initialized,
         _exception_represents_interrupt,
     )
-    from portfolio_attention.cli.train import (
-        build_arg_parser,
-        resolve_model_config_from_args,
-        resolve_paths_config_from_args,
-        resolve_runtime_configs_from_args,
-    )
+    from portfolio_attention.cli.cuda_devices import resolve_holdout_cuda_gpu_ids
     from portfolio_attention.training.monitoring import resolve_monitoring_holdout_backtest_epochs
-    from portfolio_attention.common.utils import set_seed
 else:
     from ..artifact import paths as artifact_paths
     from ..config import EvaluationConfig
@@ -76,14 +70,8 @@ else:
         _destroy_distributed_process_group_if_initialized,
         _exception_represents_interrupt,
     )
-    from ..cli.train import (
-        build_arg_parser,
-        resolve_model_config_from_args,
-        resolve_paths_config_from_args,
-        resolve_runtime_configs_from_args,
-    )
+    from ..cli.cuda_devices import resolve_holdout_cuda_gpu_ids
     from ..training.monitoring import resolve_monitoring_holdout_backtest_epochs
-    from ..common.utils import set_seed
 
 def _resolve_env_global_rank() -> int | None:
     raw_rank = os.environ.get("RANK")
@@ -219,19 +207,18 @@ class HoldoutPredictionModule(pl.LightningModule):
         return payload
 
 
-def _resolve_requested_devices(devices: int | None) -> int:
-    if devices is None:
-        return 1
-    resolved_devices = int(devices)
-    if resolved_devices <= 0:
-        raise ValueError("--devices must be positive.")
-    return resolved_devices
+def _resolve_requested_gpu_ids(
+    devices: str | int | list[int] | tuple[int, ...] | None,
+    *,
+    int_mode: str = "count",
+) -> list[int]:
+    return resolve_holdout_cuda_gpu_ids(devices, int_mode=int_mode)
 
 
 def _build_prediction_trainer(
     *,
     train_config,
-    requested_devices: int,
+    requested_gpu_ids: list[int],
 ) -> pl.Trainer:
     requested_device_name = str(getattr(train_config, "device", "auto")).strip().lower()
     prefers_gpu = requested_device_name in {"auto", "cuda"} and torch.cuda.is_available()
@@ -251,12 +238,12 @@ def _build_prediction_trainer(
             trainer_devices = [int(torch.cuda.current_device())]
             strategy = "auto"
         else:
-            if requested_devices > available_gpus:
+            if any(gpu_id >= available_gpus for gpu_id in requested_gpu_ids):
                 raise ValueError(
-                    f"Requested devices={requested_devices}, but only {available_gpus} CUDA device(s) are available."
+                    f"Requested GPU ids={requested_gpu_ids}, but only {available_gpus} CUDA device(s) are available."
                 )
-            trainer_devices = requested_devices
-            strategy = "ddp" if requested_devices > 1 else "auto"
+            trainer_devices = list(requested_gpu_ids)
+            strategy = "ddp" if len(requested_gpu_ids) > 1 else "auto"
 
     trainer = pl.Trainer(
         accelerator=accelerator,
@@ -438,35 +425,15 @@ def run_monitoring_holdout_backtest(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = build_arg_parser()
-    parser.description = "Run post-training holdout monitoring from config-selected Lightning checkpoints."
-    parser.prog = "python -m portfolio_attention.cli.holdout_test"
-    if not any(getattr(action, "dest", None) == "devices" for action in parser._actions):
-        parser.add_argument(
-            "--devices",
-            type=int,
-            default=1,
-            help="Number of local GPUs to use for holdout prediction when running standalone.",
-        )
-    return parser
+    from portfolio_attention.cli.holdout_test import _build_parser as _cli_build_parser
+
+    return _cli_build_parser()
 
 
 def _validate_cli_args(args: argparse.Namespace) -> None:
-    args_dict = vars(args)
+    from portfolio_attention.cli.holdout_test import _validate_cli_args as _cli_validate_cli_args
 
-    if int(args_dict.get("parallel", 1)) != 1:
-        raise ValueError(
-            "portfolio_attention.cli.holdout_test only supports a single loss per invocation; --parallel must be 1."
-        )
-
-    if args_dict.get("losses") is not None:
-        raise ValueError("portfolio_attention.cli.holdout_test only supports --loss, not --losses.")
-
-    if args_dict.get("states") is not None:
-        raise ValueError("portfolio_attention.cli.holdout_test only supports --state, not --states.")
-
-    if int(args_dict.get("devices", 1)) <= 0:
-        raise ValueError("--devices must be positive.")
+    _cli_validate_cli_args(args)
 
 
 def run_post_training_holdout(
@@ -476,7 +443,7 @@ def run_post_training_holdout(
     model_config,
     train_config,
     max_epoch: int,
-    devices: int | None = None,
+    devices: str | int | list[int] | tuple[int, ...] | None = None,
     evaluation_config: EvaluationConfig | None = None,
     datamodule: LightningTrainDataModule | None = None,
     interrupt_checker: Callable[[], None] | None = None,
@@ -523,17 +490,18 @@ def run_post_training_holdout(
     holdout_dataloader = None
     checkpoint_metadata = None
     if use_distributed_prediction:
-        requested_devices = _resolve_requested_devices(devices)
+        requested_gpu_ids = _resolve_requested_gpu_ids(devices, int_mode="count")
         trainer = _build_prediction_trainer(
             train_config=train_config,
-            requested_devices=requested_devices,
+            requested_gpu_ids=requested_gpu_ids,
         )
         resolved_strategy = str(getattr(trainer, "strategy", "auto"))
-        local_num_devices = int(getattr(trainer, "num_devices", requested_devices) or requested_devices)
+        requested_device_count = len(requested_gpu_ids)
+        local_num_devices = int(getattr(trainer, "num_devices", requested_device_count) or requested_device_count)
         _emit_holdout_console_message(
             "Configured distributed prediction runtime: "
             f"accelerator={trainer.accelerator.__class__.__name__} "
-            f"requested_devices={requested_devices} "
+            f"requested_gpu_ids={requested_gpu_ids} "
             f"local_devices={local_num_devices} "
             f"strategy={resolved_strategy}"
         )
@@ -731,36 +699,9 @@ def run_post_training_holdout(
 
 
 def main() -> None:
-    _INTERRUPT_CONTROLLER.install()
-    try:
-        parser = _build_parser()
-        args = parser.parse_args()
-        _validate_cli_args(args)
+    from portfolio_attention.cli.holdout_test import main as _cli_main
 
-        paths = resolve_paths_config_from_args(args)
-        data_config, train_config = resolve_runtime_configs_from_args(args)
-        evaluation_config = EvaluationConfig()
-        _configure_warning_routing(state=data_config.state, paths=paths)
-        model_config = resolve_model_config_from_args(args)
-
-        set_seed(int(train_config.seed))
-        pl.seed_everything(int(train_config.seed), workers=True)
-        run_post_training_holdout(
-            paths=paths,
-            data_config=data_config,
-            model_config=model_config,
-            train_config=train_config,
-            evaluation_config=evaluation_config,
-            max_epoch=int(train_config.num_epochs),
-            devices=int(args.devices),
-            interrupt_checker=_INTERRUPT_CONTROLLER.raise_if_interrupted,
-        )
-    except KeyboardInterrupt:
-        _destroy_distributed_process_group_if_initialized()
-        _emit_holdout_console_message("Interrupted by user signal. Exiting gracefully.")
-        return
-    finally:
-        _INTERRUPT_CONTROLLER.restore()
+    _cli_main()
 
 
 if __name__ == "__main__":

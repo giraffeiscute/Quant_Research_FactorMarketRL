@@ -9,6 +9,7 @@ import math
 import torch
 from torch import nn
 
+from .allocation_distribution import DEFAULT_DIRICHLET_LOGIT_SCALE
 from .task_head import AttentionPortfolioHead, MLPPortfolioHead
 
 
@@ -35,6 +36,7 @@ class MLPCrossSectionalScorer(nn.Module):
         dropout: float,
         uses_post_temporal_identity: bool,
         inference_allocation_mode: str = "softmax",
+        dirichlet_logit_scale: float = DEFAULT_DIRICHLET_LOGIT_SCALE,
     ) -> None:
         super().__init__()
         self.uses_post_temporal_identity = uses_post_temporal_identity
@@ -54,6 +56,7 @@ class MLPCrossSectionalScorer(nn.Module):
             cash_hidden_dim=cash_hidden_dim,
             dropout=dropout,
             inference_allocation_mode=inference_allocation_mode,
+            dirichlet_logit_scale=dirichlet_logit_scale,
         )
 
     @property
@@ -134,6 +137,7 @@ class AttentionCrossSectionalScorer(nn.Module):
         detach_prev_weight: bool,
         use_prev_weight_feature: bool,
         inference_allocation_mode: str = "softmax",
+        dirichlet_logit_scale: float = DEFAULT_DIRICHLET_LOGIT_SCALE,
     ) -> None:
         super().__init__()
         self.uses_post_temporal_identity = uses_post_temporal_identity
@@ -174,6 +178,7 @@ class AttentionCrossSectionalScorer(nn.Module):
             detach_prev_weight=detach_prev_weight,
             use_prev_weight_feature=use_prev_weight_feature,
             inference_allocation_mode=inference_allocation_mode,
+            dirichlet_logit_scale=dirichlet_logit_scale,
         )
 
     @property

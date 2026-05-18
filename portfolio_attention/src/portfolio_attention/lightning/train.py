@@ -68,13 +68,12 @@ if __package__ is None or __package__ == "":
     )
     from portfolio_attention.model.losses import build_loss
     from portfolio_attention.cli.train import (
-        _parse_states_args,
-        build_arg_parser,
         resolve_model_config_from_args,
         resolve_paths_config_from_args,
         resolve_evaluation_config_from_args,
         resolve_runtime_configs_from_args,
     )
+    from portfolio_attention.cli.cuda_devices import resolve_lightning_cuda_devices
     from portfolio_attention.training.engine import _run_loss_step, build_training_model
     from portfolio_attention.training.rl_engine import run_rl_policy_step
     from portfolio_attention.common.utils import save_runtime_config_artifact, set_seed
@@ -113,13 +112,12 @@ else:
     )
     from ..model.losses import build_loss
     from ..cli.train import (
-        _parse_states_args,
-        build_arg_parser,
         resolve_model_config_from_args,
         resolve_paths_config_from_args,
         resolve_evaluation_config_from_args,
         resolve_runtime_configs_from_args,
     )
+    from ..cli.cuda_devices import resolve_lightning_cuda_devices
     from ..training.engine import _run_loss_step, build_training_model
     from ..training.rl_engine import run_rl_policy_step
     from ..common.utils import save_runtime_config_artifact, set_seed
@@ -206,47 +204,22 @@ def _run_post_training_holdout_after_fit_with_barriers(**kwargs) -> None:
     _lightning_post_training.run_post_training_holdout_after_fit_with_barriers(**kwargs)
 
 
+def _resolve_lightning_trainer_devices(
+    devices: str | int | list[int] | tuple[int, ...] | None,
+) -> tuple[int | list[int], list[int]]:
+    return resolve_lightning_cuda_devices(devices)
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = build_arg_parser()
-    parser.description = "Run single-loss Lightning training for portfolio_attention."
-    parser.prog = "python -m portfolio_attention.cli.lightning_train"
-    parser.add_argument(
-        "--devices",
-        type=int,
-        default=1,
-        help="Number of local GPUs to use on this machine.",
-    )
-    parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=0,
-        help="DataLoader worker count for train/validation loaders.",
-    )
-    return parser
+    from portfolio_attention.cli.lightning_train import _build_parser as _cli_build_parser
+
+    return _cli_build_parser()
 
 
 def _validate_cli_args(args: argparse.Namespace) -> None:
-    args_dict = vars(args)
+    from portfolio_attention.cli.lightning_train import _validate_cli_args as _cli_validate_cli_args
 
-    if int(args_dict.get("parallel", 1)) != 1:
-        raise ValueError(
-            "portfolio_attention.cli.lightning_train only supports a single loss per invocation; --parallel must be 1."
-        )
-
-    unsupported_losses = args_dict.get("losses")
-    if unsupported_losses is not None:
-        raise ValueError("portfolio_attention.cli.lightning_train only supports --loss, not --losses.")
-
-    requested_device = args_dict.get("device")
-    if requested_device is not None:
-        normalized_device = str(requested_device).strip().lower()
-        if normalized_device not in {"auto", "cuda"}:
-            raise ValueError(
-                "portfolio_attention.cli.lightning_train always runs Lightning with accelerator='gpu'; --device must be 'auto' or 'cuda'."
-            )
-
-    if int(getattr(args, "devices", 0)) <= 0:
-        raise ValueError("--devices must be positive.")
+    _cli_validate_cli_args(args)
 
 
 def _build_state_args(args: argparse.Namespace, state: str) -> argparse.Namespace:
@@ -329,9 +302,15 @@ def _resolve_single_state_runtime(
             "portfolio_attention.cli.lightning_train requires CUDA because the Trainer is configured with accelerator='gpu'."
         )
     available_gpus = torch.cuda.device_count()
-    if int(args.devices) > available_gpus:
+    trainer_devices, resolved_gpu_ids = _resolve_lightning_trainer_devices(getattr(args, "devices", "1"))
+    if isinstance(trainer_devices, int):
+        if trainer_devices > available_gpus:
+            raise ValueError(
+                f"Requested device count={trainer_devices}, but only {available_gpus} CUDA device(s) are available."
+            )
+    elif any(gpu_id >= available_gpus for gpu_id in resolved_gpu_ids):
         raise ValueError(
-            f"Requested devices={int(args.devices)}, but only {available_gpus} CUDA device(s) are available."
+            f"Requested GPU ids={resolved_gpu_ids}, but only {available_gpus} CUDA device(s) are available."
         )
 
     return paths, data_config, train_config, evaluation_config, model_config
@@ -360,7 +339,8 @@ def _prepare_single_state_datamodule(
 
     _emit_lightning_console_message("Starting validation divisibility check.")
     _INTERRUPT_CONTROLLER.raise_if_interrupted()
-    datamodule.validate_validation_divisibility(int(args.devices))
+    _, resolved_gpu_ids = _resolve_lightning_trainer_devices(getattr(args, "devices", "1"))
+    datamodule.validate_validation_divisibility(len(resolved_gpu_ids))
     _INTERRUPT_CONTROLLER.raise_if_interrupted()
 
     if datamodule.dataset is None:
@@ -388,6 +368,7 @@ def _build_single_state_training_stack(
     evaluation_config: EvaluationConfig,
     datamodule: LightningTrainDataModule,
 ) -> tuple[PortfolioLightningModule, pl.Trainer, ConfigEpochCheckpointCallback]:
+    trainer_devices, resolved_gpu_ids = _resolve_lightning_trainer_devices(getattr(args, "devices", "1"))
     model = PortfolioLightningModule(
         data_config=data_config,
         model_config=model_config,
@@ -454,9 +435,9 @@ def _build_single_state_training_stack(
 
     trainer = pl.Trainer(
         accelerator="gpu",
-        devices=int(args.devices),
+        devices=trainer_devices,
         num_nodes=1,
-        strategy="ddp" if int(args.devices) > 1 else "auto",
+        strategy=("ddp" if len(resolved_gpu_ids) > 1 else "auto"),
         max_epochs=int(train_config.num_epochs),
         gradient_clip_val=float(train_config.grad_clip_norm),
         callbacks=callbacks,
@@ -628,26 +609,9 @@ def _run_states_sequentially(args: argparse.Namespace, states_to_run: list[str])
 
 
 def main() -> None:
-    _INTERRUPT_CONTROLLER.install()
-    try:
-        parser = _build_parser()
-        args = parser.parse_args()
-        _validate_cli_args(args)
+    from portfolio_attention.cli.lightning_train import main as _cli_main
 
-        states_to_run = _parse_states_args(args)
-
-        failed_states = _run_states_sequentially(args, states_to_run)
-        if failed_states:
-            if _is_global_rank_zero():
-                print(f"ERROR: Some states failed: {failed_states}", flush=True)
-            sys.exit(1)
-    except KeyboardInterrupt:
-        _destroy_distributed_process_group_if_initialized()
-        if _is_global_rank_zero():
-            print("Interrupted by user signal. Exiting gracefully.", flush=True)
-        return
-    finally:
-        _INTERRUPT_CONTROLLER.restore()
+    _cli_main()
 
 
 if __name__ == "__main__":

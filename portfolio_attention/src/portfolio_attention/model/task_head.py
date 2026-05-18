@@ -8,7 +8,10 @@ from typing import Any
 import torch
 from torch import nn
 
-from .allocation_distribution import AllocationDistribution
+from .allocation_distribution import (
+    AllocationDistribution,
+    DEFAULT_DIRICHLET_LOGIT_SCALE,
+)
 
 
 @dataclass
@@ -33,6 +36,7 @@ class MLPPortfolioHead(nn.Module):
         cash_hidden_dim: int,
         dropout: float,
         inference_allocation_mode: str = "softmax",
+        dirichlet_logit_scale: float = DEFAULT_DIRICHLET_LOGIT_SCALE,
     ) -> None:
         super().__init__()
         self.stock_score = nn.Sequential(
@@ -49,6 +53,7 @@ class MLPPortfolioHead(nn.Module):
         )
         self.allocation_distribution = AllocationDistribution(
             inference_allocation_mode=inference_allocation_mode,
+            dirichlet_logit_scale=dirichlet_logit_scale,
         )
 
     def forward(
@@ -87,6 +92,7 @@ class AttentionPortfolioHead(nn.Module):
         detach_prev_weight: bool,
         use_prev_weight_feature: bool,
         inference_allocation_mode: str = "softmax",
+        dirichlet_logit_scale: float = DEFAULT_DIRICHLET_LOGIT_SCALE,
     ) -> None:
         super().__init__()
         self.stock_attention_dim = stock_attention_dim
@@ -98,6 +104,7 @@ class AttentionPortfolioHead(nn.Module):
         self.cash_cross_attention_score = nn.Linear(stock_attention_dim, 1)
         self.allocation_distribution = AllocationDistribution(
             inference_allocation_mode=inference_allocation_mode,
+            dirichlet_logit_scale=dirichlet_logit_scale,
         )
         self.cash_state_mlp_base = nn.Sequential(
             nn.Linear(stock_attention_dim, stock_attention_dim),

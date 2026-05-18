@@ -133,6 +133,7 @@ class ModelConfig:
     stock_cross_sectional_encoder_type: Literal["mlp", "self_attention"] = "self_attention"
     time_positional_encoding_type: Literal["none", "sinusoidal"] = "sinusoidal"
     allocation_smoothing_alpha: float = 0.9
+    dirichlet_logit_scale: float = 3.0
     initial_allocation_mode: Literal["equal_weight", "random_dirichlet"] = "random_dirichlet"
     inference_allocation_mode: Literal["softmax", "dirichlet_mean"] = "softmax"
     initial_random_concentration: float = 1
@@ -213,6 +214,7 @@ class RLTrainingConfig:
     entropy_coef: float = 0.001
     alpha_min: float = 0.05
     alpha_max: float = 50.0
+    rl_post_train_evidence_scale: float = 0.3
 
     @staticmethod
     def warmup_days_for_horizon(rolling_horizon_days: int) -> int:

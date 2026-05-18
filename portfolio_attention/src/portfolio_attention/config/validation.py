@@ -303,6 +303,12 @@ def validate_model_config(config: ModelConfig) -> None:
             "ModelConfig.allocation_smoothing_alpha must be in [0.0, 1.0], "
             f"received {config.allocation_smoothing_alpha}."
         )
+    config.dirichlet_logit_scale = float(config.dirichlet_logit_scale)
+    if config.dirichlet_logit_scale <= 0.0:
+        raise ValueError(
+            "ModelConfig.dirichlet_logit_scale must be > 0.0, "
+            f"received {config.dirichlet_logit_scale}."
+        )
 
     config.initial_allocation_mode = str(config.initial_allocation_mode).strip().lower()
     valid_initial_allocation_modes = {"equal_weight", "random_dirichlet"}
@@ -526,6 +532,13 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
         raise ValueError(
             "TrainConfig.rl_training.alpha_min must be <= alpha_max, "
             f"received alpha_min={config.alpha_min} alpha_max={config.alpha_max}."
+        )
+
+    config.rl_post_train_evidence_scale = float(config.rl_post_train_evidence_scale)
+    if config.rl_post_train_evidence_scale <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.rl_post_train_evidence_scale must be > 0, "
+            f"received {config.rl_post_train_evidence_scale}."
         )
 
     return config
