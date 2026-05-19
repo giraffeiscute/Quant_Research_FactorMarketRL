@@ -16,11 +16,10 @@ from ..model.allocation_distribution import logits_to_rl_post_train_dirichlet_al
 from ..model.reward import (
     compute_dsr_day_reward,
     compute_dsr_warmup_stats,
-    compute_group_relative_advantage,
-    compute_policy_gradient_objective,
     compute_return_reward,
     compute_rolling_sharpe_reward,
 )
+from . import rl_algorithms
 
 
 @dataclass(frozen=True)
@@ -128,17 +127,21 @@ def run_rl_policy_step(
             ).reshape(group_size, -1)
         else:
             raise ValueError(f"Unsupported RL reward_type: {reward_type!r}.")
-        advantages = compute_group_relative_advantage(rewards, group_dim=0)
     action_dim = int(alpha.shape[-1])
     entropy_per_dim = entropy / float(action_dim)
     entropy_loss = -float(train_config.rl_training.entropy_coef) * entropy_per_dim.mean()
-    policy_loss = compute_policy_gradient_objective(
-        sampled_log_probs, #no detach
-        advantages,
-        entropy=entropy,
-        entropy_coef=float(train_config.rl_training.entropy_coef),
-        entropy_normalizer=float(action_dim),
-    )
+    algorithm = str(train_config.rl_training.algorithm).strip().lower()
+    if algorithm == "grpo_like":
+        policy_loss, advantages = rl_algorithms.compute_grpo_like_policy_loss(
+            sampled_log_probs,  # no detach
+            rewards,
+            entropy=entropy,
+            entropy_coef=float(train_config.rl_training.entropy_coef),
+            entropy_normalizer=float(action_dim),
+            group_dim=0,
+        )
+    else:
+        raise ValueError(f"Unsupported RL training algorithm: {algorithm!r}.")
 
     scenario_final_returns = torch.prod(1.0 + net_scored_returns, dim=1) - 1.0
     summary = {
