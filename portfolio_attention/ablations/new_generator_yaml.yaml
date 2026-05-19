@@ -1,0 +1,22 @@
+paths:
+  output_root: /root/FactorMarketRL/new_generator/weight_output
+
+data:
+  state: neutral
+  scenario_dir: /root/FactorMarketRL/new_generator/portfolio_attention_bridge/neutral
+  scenario_glob: "{state}_*_PL_*.parquet"
+  num_train_scenarios: 74
+  num_validation_scenarios: 8
+  num_test_scenarios: 6
+  train_batch_size: 10
+
+model:
+    detach_prev_weight: False
+    use_prev_weight_feature: False
+
+train:
+  loss_name: sharpe
+  num_epochs: 30
+  holdout_backtest_interval_epochs: 4
+  early_stopping_patience: 20
+  turnover_penalty: 0

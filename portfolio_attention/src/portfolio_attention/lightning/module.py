@@ -128,6 +128,7 @@ class PortfolioLightningModule(pl.LightningModule):
             self.model,
             batch,
             data_config=self.data_config,
+            model_config=self.model_config,
             train_config=self.train_config,
         )
         self._latest_train_diagnostics = self._build_train_diagnostics(

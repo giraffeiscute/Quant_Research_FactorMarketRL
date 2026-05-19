@@ -1,5 +1,5 @@
 train:
-  learning_rate: 1e-5
+  learning_rate: 1e-4
   num_epochs: 150
   early_stopping_patience: 80
   turnover_penalty: 0
@@ -7,19 +7,21 @@ train:
   lr_warmup_fraction: 0.1
   lr_min_factor: 0.1
   rl_training:
-    reward_type: dsr_day_last
+    reward_type: return
     enabled: true
     group_size: 512
     entropy_coef: 0.01
-    alpha_min: 0.005
+    alpha_min: 1e-6
     alpha_max: 100.0
-    rl_post_train_evidence_scale: 0.3
+    rl_post_train_evidence_scale: 0.1
 data:
-  sample_num_stocks: 400
+  sample_num_stocks: 1000
   train_batch_size: 5
+  rolling_horizon_days: 2
+  rolling_stride_days: 2
 model:
   detach_prev_weight: false
   use_prev_weight_feature: false
   allocation_smoothing_alpha: 1
   inference_allocation_mode: dirichlet_mean
-  dirichlet_logit_scale: 5
+  dirichlet_logit_scale: 10

@@ -9,7 +9,7 @@ import torch
 from torch.distributions import Dirichlet
 
 from ..common.utils import apply_score_mask
-from ..config import DataConfig, TrainConfig
+from ..config import DataConfig, ModelConfig, TrainConfig
 from ..evaluation.metrics import apply_transaction_cost_to_returns
 from ..model import PortfolioAttentionModel
 from ..model.allocation_distribution import logits_to_rl_post_train_dirichlet_alpha
@@ -36,6 +36,7 @@ def run_rl_policy_step(
     batch: dict[str, Any],
     *,
     data_config: DataConfig,
+    model_config: ModelConfig,
     train_config: TrainConfig,
 ) -> RLPolicyStepResult:
     outputs = model(
@@ -68,6 +69,7 @@ def run_rl_policy_step(
         scored_logits[:, -1, :],
         alpha_min=float(train_config.rl_training.alpha_min),
         alpha_max=float(train_config.rl_training.alpha_max),
+        logit_scale=float(model_config.dirichlet_logit_scale),
         evidence_scale=float(train_config.rl_training.rl_post_train_evidence_scale),
     )
     dist = Dirichlet(alpha)
