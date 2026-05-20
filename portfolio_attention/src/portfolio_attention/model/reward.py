@@ -232,11 +232,15 @@ def compute_rolling_sharpe_reward(
 def compute_return_reward(
     portfolio_returns: torch.Tensor,
     *,
+    reward_scale: float = 1.0,
     reward_clip: float | None = 5.0,
 ) -> torch.Tensor:
     """Compute final-day simple return reward with positive reward sign."""
     scored_returns = _coerce_portfolio_returns(portfolio_returns)
-    reward = scored_returns[:, -1]
+    scale = float(reward_scale)
+    if scale <= 0.0:
+        raise ValueError(f"reward_scale must be > 0, received {reward_scale}.")
+    reward = scored_returns[:, -1] / scale
     if reward_clip is not None:
         clip_value = float(reward_clip)
         if clip_value <= 0.0:

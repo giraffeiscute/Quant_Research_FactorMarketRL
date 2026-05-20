@@ -502,6 +502,13 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             f"received {config.dsr_var_eps}."
         )
 
+    config.reward_scale = float(config.reward_scale)
+    if config.reward_scale <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.reward_scale must be > 0, "
+            f"received {config.reward_scale}."
+        )
+
     config.reward_clip = float(config.reward_clip)
     if config.reward_clip <= 0.0:
         raise ValueError(

@@ -211,6 +211,7 @@ class RLTrainingConfig:
     group_size: int = 10
     warmup_allocation_mode: Literal["deterministic_mean"] = "deterministic_mean"
     dsr_var_eps: float = 1e-8
+    reward_scale: float = 1.0
     reward_clip: float = 5.0
     entropy_coef: float = 0.001
     alpha_min: float = 0.05

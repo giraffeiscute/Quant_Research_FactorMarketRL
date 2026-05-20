@@ -126,6 +126,7 @@ def run_rl_policy_step(
         elif reward_type == "return":
             rewards = compute_return_reward(
                 sampled_prediction_returns.reshape(-1, horizon_days),
+                reward_scale=float(train_config.rl_training.reward_scale),
                 reward_clip=float(train_config.rl_training.reward_clip),
             ).reshape(group_size, -1)
         elif reward_type == "win_rate":
