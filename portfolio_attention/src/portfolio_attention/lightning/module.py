@@ -9,8 +9,8 @@ from typing import Any
 import lightning.pytorch as pl
 import torch
 
-from ..config import DataConfig, ModelConfig, TrainConfig
-from ..config.validation import validated_train_config
+from ..config import DataConfig, EvaluationConfig, ModelConfig, TrainConfig
+from ..config.validation import validated_evaluation_config, validated_train_config
 from ..data.dataset import PortfolioPanelDataset
 from ..training.engine import _run_loss_step, build_training_model
 from ..training.lr_scheduler import (
@@ -41,12 +41,14 @@ class PortfolioLightningModule(pl.LightningModule):
         stock_count_weight_threshold: float,
         stock_count_min_active_days: int,
         evaluation_transaction_cost_rate: float = 0.0,
+        evaluation_config: EvaluationConfig | None = None,
         gradient_diagnostics_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.data_config = data_config
         self.model_config = model_config
         self.train_config = validated_train_config(train_config)
+        self.evaluation_config = validated_evaluation_config(evaluation_config or EvaluationConfig())
         self.dataset = dataset
         self.stock_count_weight_threshold = float(stock_count_weight_threshold)
         self.stock_count_min_active_days = int(stock_count_min_active_days)
@@ -130,6 +132,7 @@ class PortfolioLightningModule(pl.LightningModule):
             data_config=self.data_config,
             model_config=self.model_config,
             train_config=self.train_config,
+            evaluation_config=self.evaluation_config,
         )
         self._latest_train_diagnostics = self._build_train_diagnostics(
             loss=result.policy_loss,
@@ -192,6 +195,7 @@ class PortfolioLightningModule(pl.LightningModule):
             turnover_penalty_norm=str(self.train_config.turnover_penalty_norm),
             stock_count_weight_threshold=self.stock_count_weight_threshold,
             stock_count_min_active_days=self.stock_count_min_active_days,
+            reward_baseline=str(self.evaluation_config.reward_baseline),
         )
 
         self.val_metric.update(
@@ -202,6 +206,8 @@ class PortfolioLightningModule(pl.LightningModule):
             selected_stock_count=metrics["selected_stock_count"],
             average_turnover=metrics["average_turnover"],
             mean_cash_weight=metrics["mean_cash_weight"],
+            win_count=metrics["win_count"],
+            win_rate_window_count=metrics["win_rate_window_count"],
         )
 
     def on_validation_epoch_end(self) -> None:
@@ -227,6 +233,11 @@ class PortfolioLightningModule(pl.LightningModule):
             "val_cash",
             metrics["val_cash"],
             prog_bar=False,
+        )
+        self._log_validation_epoch_metric(
+            "val_win_rate",
+            metrics["val_win_rate"],
+            prog_bar=True,
         )
 
     def _log_train_epoch_metric(

@@ -296,6 +296,7 @@ def _resolve_single_state_runtime(
         data_config=data_config,
         model_config=model_config,
         train_config=train_config,
+        evaluation_config=evaluation_config,
     )
     if not torch.cuda.is_available():
         raise RuntimeError(
@@ -377,6 +378,7 @@ def _build_single_state_training_stack(
         stock_count_weight_threshold=float(evaluation_config.stock_count_weight_threshold),
         stock_count_min_active_days=int(evaluation_config.stock_count_min_active_days),
         evaluation_transaction_cost_rate=float(evaluation_config.evaluation_transaction_cost_rate),
+        evaluation_config=evaluation_config,
         gradient_diagnostics_path=gradient_diagnostics_path(
             outputs_dir=paths.outputs_dir,
             state=data_config.state,

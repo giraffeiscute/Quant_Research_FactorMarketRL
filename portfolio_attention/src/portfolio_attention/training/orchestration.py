@@ -475,6 +475,7 @@ def run_epoch_training(
         data_config=data_config,
         model_config=model_config,
         train_config=train_config,
+        evaluation_config=EvaluationConfig(),
     )
     device = resolve_device(train_config.device)
     log_path = log_path_for_loss(paths, train_config.loss_name, state=data_config.state)

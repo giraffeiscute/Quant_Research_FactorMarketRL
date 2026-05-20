@@ -8,9 +8,10 @@ from typing import Any
 import torch
 from torch.distributions import Dirichlet
 
+from ..common.net_return import apply_transaction_cost_to_returns
 from ..common.utils import apply_score_mask
-from ..config import DataConfig, ModelConfig, TrainConfig
-from ..evaluation.metrics import apply_transaction_cost_to_returns
+from ..common.win_rate import compute_win_rate_metrics
+from ..config import DataConfig, EvaluationConfig, ModelConfig, TrainConfig
 from ..model import PortfolioAttentionModel
 from ..model.allocation_distribution import logits_to_rl_post_train_dirichlet_alpha
 from ..model.reward import (
@@ -37,7 +38,9 @@ def run_rl_policy_step(
     data_config: DataConfig,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    evaluation_config: EvaluationConfig | None = None,
 ) -> RLPolicyStepResult:
+    resolved_evaluation_config = evaluation_config or EvaluationConfig()
     outputs = model(
         batch["x_stock"],
         batch["x_market"],
@@ -125,6 +128,15 @@ def run_rl_policy_step(
                 sampled_prediction_returns.reshape(-1, horizon_days),
                 reward_clip=float(train_config.rl_training.reward_clip),
             ).reshape(group_size, -1)
+        elif reward_type == "win_rate":
+            win_rate_metrics = compute_win_rate_metrics(
+                sampled_net_reward_return,
+                reward_stock_returns,
+                reward_previous_allocation,
+                reward_baseline=str(resolved_evaluation_config.reward_baseline),
+                transaction_cost_rate=float(train_config.transaction_cost_rate),
+            )
+            rewards = win_rate_metrics.binary_reward
         else:
             raise ValueError(f"Unsupported RL reward_type: {reward_type!r}.")
     action_dim = int(alpha.shape[-1])

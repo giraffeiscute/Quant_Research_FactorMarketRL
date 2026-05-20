@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from ..config import DataConfig, ModelConfig, PathsConfig, TrainConfig
+from ..config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
 
 
 DEFAULT_CUBLAS_WORKSPACE_CONFIG = ":4096:8"
@@ -161,11 +161,13 @@ def save_runtime_config_artifact(
     data_config: DataConfig,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    evaluation_config: EvaluationConfig | None = None,
 ) -> Path:
     payload = {
         "data_config": serialize_config_dataclass(data_config),
         "model_config": serialize_config_dataclass(model_config),
         "train_config": serialize_config_dataclass(train_config),
+        "evaluation_config": serialize_config_dataclass(evaluation_config or EvaluationConfig()),
     }
     output_path = runtime_config_output_path(paths, data_config.state, train_config.loss_name)
     save_json(payload, output_path)

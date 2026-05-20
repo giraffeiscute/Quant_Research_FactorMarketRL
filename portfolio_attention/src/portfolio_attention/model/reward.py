@@ -6,6 +6,8 @@ from typing import Literal
 
 import torch
 
+from ..common.win_rate import compute_binary_win_rate_reward
+
 
 def _coerce_portfolio_returns(portfolio_returns: torch.Tensor) -> torch.Tensor:
     if portfolio_returns.numel() == 0:
@@ -241,3 +243,11 @@ def compute_return_reward(
             raise ValueError(f"reward_clip must be > 0 when set, received {reward_clip}.")
         reward = torch.clamp(reward, min=-clip_value, max=clip_value)
     return reward
+
+
+def compute_win_rate_reward(
+    portfolio_returns: torch.Tensor,
+    baseline_returns: torch.Tensor,
+) -> torch.Tensor:
+    """Return +1 when portfolio return strictly beats baseline return, otherwise -1."""
+    return compute_binary_win_rate_reward(portfolio_returns, baseline_returns)

@@ -7,7 +7,7 @@ from typing import Literal
 
 import torch
 
-from ..evaluation.metrics import apply_transaction_cost_to_returns
+from ..common.net_return import apply_transaction_cost_to_returns
 
 
 def _coerce_portfolio_returns(portfolio_returns: torch.Tensor) -> torch.Tensor:

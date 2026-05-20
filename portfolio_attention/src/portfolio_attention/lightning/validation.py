@@ -7,6 +7,7 @@ from typing import Any
 import torch
 from torchmetrics import Metric
 
+from ..common.win_rate import compute_win_rate_metrics
 from ..data.dataset import PortfolioPanelDataset
 from ..evaluation.metrics import (
     apply_transaction_cost_to_returns,
@@ -110,6 +111,7 @@ def _coerce_rolling_outputs(value: RollingScenarioOutputs | dict[str, Any]) -> R
     turnover = value.get("turnover")
     stock_weights = value.get("stock_weights")
     cash_weights = value.get("cash_weights")
+    previous_allocation = value.get("previous_allocation")
     if not isinstance(portfolio_returns, torch.Tensor):
         raise RuntimeError("Validation rolling outputs require portfolio_returns tensor.")
     if not isinstance(turnover, torch.Tensor):
@@ -136,6 +138,9 @@ def _coerce_rolling_outputs(value: RollingScenarioOutputs | dict[str, Any]) -> R
         evaluation_price_anchor_mode=str(value.get("evaluation_price_anchor_mode", "")),
         stock_weights=stock_weights if isinstance(stock_weights, torch.Tensor) else None,
         cash_weights=cash_weights if isinstance(cash_weights, torch.Tensor) else None,
+        previous_allocation=(
+            previous_allocation if isinstance(previous_allocation, torch.Tensor) else None
+        ),
     )
 
 
@@ -155,6 +160,7 @@ def compute_validation_scenario_metrics(
     turnover_penalty_norm: str,
     stock_count_weight_threshold: float,
     stock_count_min_active_days: int,
+    reward_baseline: str = "cash",
 ) -> dict[str, torch.Tensor | float | int]:
     rolling_outputs = _coerce_rolling_outputs(
         _collect_validation_rolling_outputs(
@@ -167,7 +173,10 @@ def compute_validation_scenario_metrics(
             collect_weights=True,
         )
     )
-    if rolling_outputs.stock_weights is None or rolling_outputs.cash_weights is None:
+    if (
+        rolling_outputs.stock_weights is None
+        or rolling_outputs.cash_weights is None
+    ):
         raise RuntimeError("Lightning validation requires stock and cash weights.")
     scored_returns = apply_transaction_cost_to_returns(
         rolling_outputs.portfolio_returns,
@@ -199,6 +208,34 @@ def compute_validation_scenario_metrics(
         rolling_outputs.cash_weights,
     )
     mean_cash_weight = rolling_outputs.cash_weights.mean()
+    score_mask = raw_batch.get("score_mask")
+    raw_stock_returns = raw_batch.get("r_stock")
+    if not isinstance(score_mask, torch.Tensor):
+        raise RuntimeError("Lightning validation win rate requires tensor score_mask.")
+    if not isinstance(raw_stock_returns, torch.Tensor):
+        raise RuntimeError("Lightning validation win rate requires tensor r_stock.")
+    if not isinstance(rolling_outputs.previous_allocation, torch.Tensor):
+        raise RuntimeError("Lightning validation win rate requires previous_allocation.")
+    if score_mask.ndim != 2 or int(score_mask.shape[0]) != 1:
+        raise RuntimeError(
+            "Lightning validation win rate expects score_mask with shape [1, T]. "
+            f"Received {tuple(score_mask.shape)}."
+        )
+    if raw_stock_returns.ndim != 3 or int(raw_stock_returns.shape[0]) != 1:
+        raise RuntimeError(
+            "Lightning validation win rate expects r_stock with shape [1, T, N]. "
+            f"Received {tuple(raw_stock_returns.shape)}."
+        )
+    scored_stock_returns = raw_stock_returns[0, score_mask[0].to(dtype=torch.bool)]
+    win_rate_metrics = compute_win_rate_metrics(
+        scored_returns.squeeze(0),
+        scored_stock_returns,
+        rolling_outputs.previous_allocation,
+        reward_baseline=reward_baseline,
+        transaction_cost_rate=evaluation_transaction_cost_rate,
+    )
+    win_count = win_rate_metrics.win_count
+    win_rate_window_count = win_rate_metrics.window_count
     return {
         "loss": loss.detach(),
         "window_loss": window_loss.detach(),
@@ -207,6 +244,8 @@ def compute_validation_scenario_metrics(
         "selected_stock_count": selected_stock_count,
         "average_turnover": average_turnover,
         "mean_cash_weight": mean_cash_weight,
+        "win_count": win_count,
+        "win_rate_window_count": win_rate_window_count,
     }
 
 
@@ -225,6 +264,12 @@ class ScenarioRollingValidationMetric(Metric):
         self.add_state("selected_stock_count_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("average_turnover_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("mean_cash_weight_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("win_count", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum")
+        self.add_state(
+            "win_rate_window_count",
+            default=torch.tensor(0, dtype=torch.long),
+            dist_reduce_fx="sum",
+        )
 
     def update(
         self,
@@ -236,6 +281,8 @@ class ScenarioRollingValidationMetric(Metric):
         selected_stock_count: torch.Tensor | int | float,
         average_turnover: torch.Tensor | float,
         mean_cash_weight: torch.Tensor | float,
+        win_count: torch.Tensor | int = 0,
+        win_rate_window_count: torch.Tensor | int = 0,
         scenario_count: torch.Tensor | int = 1,
     ) -> None:
         self.loss_sum += torch.as_tensor(loss_value, device=self.loss_sum.device, dtype=self.loss_sum.dtype)
@@ -275,6 +322,16 @@ class ScenarioRollingValidationMetric(Metric):
             device=self.mean_cash_weight_sum.device,
             dtype=self.mean_cash_weight_sum.dtype,
         )
+        self.win_count += torch.as_tensor(
+            win_count,
+            device=self.win_count.device,
+            dtype=self.win_count.dtype,
+        )
+        self.win_rate_window_count += torch.as_tensor(
+            win_rate_window_count,
+            device=self.win_rate_window_count.device,
+            dtype=self.win_rate_window_count.dtype,
+        )
 
     def compute(self) -> dict[str, torch.Tensor]:
         if int(self.scenario_count.item()) <= 0:
@@ -287,6 +344,7 @@ class ScenarioRollingValidationMetric(Metric):
                 "val_stock": zero,
                 "val_OT": zero,
                 "val_cash": zero,
+                "val_win_rate": zero,
             }
 
         scenario_count = self.scenario_count.to(dtype=self.loss_sum.dtype)
@@ -302,6 +360,12 @@ class ScenarioRollingValidationMetric(Metric):
             "val_stock": self.selected_stock_count_sum / scenario_count,
             "val_OT": self.average_turnover_sum / scenario_count,
             "val_cash": self.mean_cash_weight_sum / scenario_count,
+            "val_win_rate": (
+                self.loss_sum.new_zeros(())
+                if int(self.win_rate_window_count.item()) <= 0
+                else self.win_count.to(dtype=self.loss_sum.dtype)
+                / self.win_rate_window_count.to(dtype=self.loss_sum.dtype)
+            ),
         }
 
 

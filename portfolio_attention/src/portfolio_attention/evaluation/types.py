@@ -191,6 +191,7 @@ class RollingScenarioOutputs:
     evaluation_price_anchor_mode: str
     stock_weights: torch.Tensor | None = None
     cash_weights: torch.Tensor | None = None
+    previous_allocation: torch.Tensor | None = None
 
     def to_legacy_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -209,6 +210,8 @@ class RollingScenarioOutputs:
             payload["stock_weights"] = self.stock_weights
         if self.cash_weights is not None:
             payload["cash_weights"] = self.cash_weights
+        if self.previous_allocation is not None:
+            payload["previous_allocation"] = self.previous_allocation
         return payload
 
 

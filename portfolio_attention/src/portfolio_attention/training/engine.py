@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from ..config import DataConfig, ModelConfig, PathsConfig, TrainConfig
 from ..data.dataset import PortfolioPanelDataset
-from ..evaluation.metrics import apply_transaction_cost_to_returns
+from ..common.net_return import apply_transaction_cost_to_returns
 from ..evaluation.runtime import (
     EVALUATION_PRICE_ANCHOR_MODE_PER_WINDOW,
     ROLLING_ONE_STEP_EVALUATION_MODE,

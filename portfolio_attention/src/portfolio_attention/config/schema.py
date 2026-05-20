@@ -198,6 +198,7 @@ class EvaluationConfig:
     stock_count_weight_threshold: float = 0.001
     stock_count_min_active_days: int = 2
     evaluation_transaction_cost_rate: float = 0.001
+    reward_baseline: Literal["cash", "uniform"] = "cash"
 
 
 @dataclass
@@ -206,7 +207,7 @@ class RLTrainingConfig:
 
     enabled: bool = False
     algorithm: Literal["grpo_like"] = "grpo_like"
-    reward_type: Literal["dsr_day_last", "rolling_sharpe", "return"] = "dsr_day_last"
+    reward_type: Literal["dsr_day_last", "rolling_sharpe", "return", "win_rate"] = "dsr_day_last"
     group_size: int = 10
     warmup_allocation_mode: Literal["deterministic_mean"] = "deterministic_mean"
     dsr_var_eps: float = 1e-8

@@ -26,6 +26,7 @@ PREFERRED_METRIC_KEY_ORDER = [
     "val_OT",
     "val_stock",
     "val_cash",
+    "val_win_rate",
 ]
 RL_PREFERRED_METRIC_KEY_ORDER = [
     "epoch",
@@ -49,6 +50,7 @@ RL_PREFERRED_METRIC_KEY_ORDER = [
     "val_OT",
     "val_stock",
     "val_cash",
+    "val_win_rate",
 ]
 
 

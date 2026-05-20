@@ -181,6 +181,7 @@ def collect_single_scenario_rolling_outputs(
     turnover_by_day: list[torch.Tensor] = []
     stock_weights_by_day: list[torch.Tensor] = []
     cash_weights_by_day: list[torch.Tensor] = []
+    previous_allocation_by_day: list[torch.Tensor] = []
     if interrupt_checker is not None:
         interrupt_checker()
     for scored_position in scored_positions.tolist():
@@ -241,12 +242,17 @@ def collect_single_scenario_rolling_outputs(
         if collect_weights:
             stock_weights = outputs.get("stock_weights")
             cash_weights = outputs.get("cash_weight")
-            if stock_weights is None or cash_weights is None:
+            previous_allocation = outputs.get("previous_allocation")
+            if stock_weights is None or cash_weights is None or previous_allocation is None:
                 raise RuntimeError(
-                    f"{evaluation_label} requires stock_weights and cash_weight for every window."
+                    f"{evaluation_label} requires stock_weights, cash_weight, and previous_allocation "
+                    "for every window."
                 )
             stock_weights_by_day.append(stock_weights[:, -1, :].detach().cpu().squeeze(0))
             cash_weights_by_day.append(cash_weights[:, -1].detach().cpu().squeeze(0))
+            previous_allocation_by_day.append(
+                previous_allocation[:, -1, :].detach().cpu().squeeze(0)
+            )
         if interrupt_checker is not None:
             interrupt_checker()
 
@@ -276,6 +282,9 @@ def collect_single_scenario_rolling_outputs(
         evaluation_price_anchor_mode=EVALUATION_PRICE_ANCHOR_MODE_PER_WINDOW,
         stock_weights=torch.stack(stock_weights_by_day, dim=0) if collect_weights else None,
         cash_weights=torch.stack(cash_weights_by_day, dim=0) if collect_weights else None,
+        previous_allocation=(
+            torch.stack(previous_allocation_by_day, dim=0) if collect_weights else None
+        ),
     )
 
 

@@ -473,7 +473,7 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
         )
 
     config.reward_type = str(config.reward_type).strip().lower()  # type: ignore[assignment]
-    valid_reward_types = {"dsr_day_last", "rolling_sharpe", "return"}
+    valid_reward_types = {"dsr_day_last", "rolling_sharpe", "return", "win_rate"}
     if config.reward_type not in valid_reward_types:
         raise ValueError(
             "TrainConfig.rl_training.reward_type must be one of "
@@ -545,6 +545,15 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
 
 
 def validate_evaluation_config(config: EvaluationConfig) -> None:
+    config.reward_baseline = str(config.reward_baseline).strip().lower()  # type: ignore[assignment]
+    valid_reward_baselines = {"cash", "uniform"}
+    if config.reward_baseline not in valid_reward_baselines:
+        raise ValueError(
+            "EvaluationConfig.reward_baseline must be one of "
+            f"{sorted(valid_reward_baselines)}, "
+            f"received {config.reward_baseline!r}."
+        )
+
     config.stock_count_weight_threshold = float(config.stock_count_weight_threshold)
     if config.stock_count_weight_threshold < 0.0:
         raise ValueError(
