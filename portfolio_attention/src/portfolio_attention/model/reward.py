@@ -249,6 +249,67 @@ def compute_return_reward(
     return reward
 
 
+def compute_turnover_reward_regularizer(
+    action: torch.Tensor,
+    previous_allocation: torch.Tensor,
+    *,
+    norm: str = "l1",
+) -> torch.Tensor:
+    """Compute per-action turnover regularizer for RL reward shaping."""
+    if action.numel() == 0:
+        raise ValueError("action must not be empty.")
+    if previous_allocation.numel() == 0:
+        raise ValueError("previous_allocation must not be empty.")
+    if action.ndim < 1 or previous_allocation.ndim < 1:
+        raise ValueError(
+            "action and previous_allocation must include an asset dimension. "
+            f"Received action={tuple(action.shape)} previous_allocation={tuple(previous_allocation.shape)}."
+        )
+    if int(action.shape[-1]) != int(previous_allocation.shape[-1]):
+        raise ValueError(
+            "action and previous_allocation must share the asset dimension. "
+            f"Received action={tuple(action.shape)} previous_allocation={tuple(previous_allocation.shape)}."
+        )
+    action_tensor, previous_tensor = torch.broadcast_tensors(action, previous_allocation)
+    allocation_delta = action_tensor - previous_tensor
+    resolved_norm = str(norm).strip().lower()
+    if resolved_norm == "l1":
+        return 0.5 * allocation_delta.abs().sum(dim=-1)
+    if resolved_norm == "l2":
+        return allocation_delta.pow(2).sum(dim=-1)
+    raise ValueError(
+        "turnover_penalty_norm must be one of {'l1', 'l2'}, "
+        f"received {norm!r}."
+    )
+
+
+def apply_turnover_reward_penalty(
+    base_reward: torch.Tensor,
+    action: torch.Tensor,
+    previous_allocation: torch.Tensor,
+    *,
+    turnover_penalty: float = 0.0,
+    turnover_penalty_norm: str = "l1",
+    reward_scale: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Subtract turnover reward penalty after the base reward has been clipped."""
+    scale = float(reward_scale)
+    if scale <= 0.0:
+        raise ValueError(f"reward_scale must be > 0, received {reward_scale}.")
+    regularizer = compute_turnover_reward_regularizer(
+        action,
+        previous_allocation,
+        norm=turnover_penalty_norm,
+    )
+    if tuple(regularizer.shape) != tuple(base_reward.shape):
+        raise ValueError(
+            "turnover reward regularizer must match base_reward shape. "
+            f"Received regularizer={tuple(regularizer.shape)} base_reward={tuple(base_reward.shape)}."
+        )
+    penalty = (float(turnover_penalty) / scale) * regularizer
+    return base_reward - penalty, penalty
+
+
 def compute_win_rate_reward(
     portfolio_returns: torch.Tensor,
     baseline_returns: torch.Tensor,

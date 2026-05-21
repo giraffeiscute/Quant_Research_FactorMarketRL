@@ -165,6 +165,7 @@ def _export_monitoring_holdout_payloads(
         "rolling_window_stride_days",
         "num_rolling_windows",
         "mean_average_turnover",
+        "mean_cash_weight",
         "evaluation_transaction_cost_rate",
     ):
         if field_name in monitoring_summary:
@@ -199,6 +200,7 @@ def _export_monitoring_holdout_payloads(
             "final_return": float(item["final_return"]),
             "backtest_portfolio_sr": float(item["backtest_portfolio_sr"]),
             "average_turnover": float(item["average_turnover"]),
+            "mean_cash_weight": float(item["mean_cash_weight"]),
             "benchmark_market_index_csv": item.get("benchmark_market_index_csv"),
             "benchmark_excess_return": evaluation_shared.coerce_optional_float(
                 item.get("benchmark_excess_return")
@@ -211,6 +213,7 @@ def _export_monitoring_holdout_payloads(
             "rolling_window_stride_days": item.get("rolling_window_stride_days"),
             "num_rolling_windows": item.get("num_rolling_windows"),
             "evaluation_transaction_cost_rate": item.get("evaluation_transaction_cost_rate"),
+            "metrics_text": item.get("metrics_text"),
             "weight_trajectory_chart": item.get("weight_trajectory_chart"),
             "weight_trajectory_overview_chart": overview_path_by_scenario.get(str(item["scenario_id"])),
         }

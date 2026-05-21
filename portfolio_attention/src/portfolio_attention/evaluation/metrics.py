@@ -5,6 +5,16 @@ from __future__ import annotations
 import torch
 
 from ..common.net_return import apply_transaction_cost_to_returns
+from ..model.losses import sharpe_loss
+
+
+def compute_portfolio_sr_tensor(portfolio_returns: torch.Tensor) -> torch.Tensor:
+    """Compute the Sharpe-like SR value used by holdout backtests."""
+    return -sharpe_loss(portfolio_returns.detach())
+
+
+def compute_portfolio_sr(portfolio_returns: torch.Tensor) -> float:
+    return float(compute_portfolio_sr_tensor(portfolio_returns).detach().cpu().item())
 
 
 def compute_selected_stock_count_from_weights(
@@ -56,3 +66,5 @@ def compute_average_turnover_from_weights(
 _compute_selected_stock_count_from_weights = compute_selected_stock_count_from_weights
 _compute_average_turnover_from_weights = compute_average_turnover_from_weights
 _apply_transaction_cost_to_returns = apply_transaction_cost_to_returns
+_compute_portfolio_sr = compute_portfolio_sr
+_compute_portfolio_sr_tensor = compute_portfolio_sr_tensor

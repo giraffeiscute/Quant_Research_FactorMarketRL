@@ -30,17 +30,12 @@ def fixed_window_causal_mean(values: torch.Tensor, window_size: int) -> torch.Te
     if window_size >= time_steps:
         return causal_running_mean(values)
 
-    cumsum = values.cumsum(dim=1)
-    window_sums = cumsum.clone()
-    window_sums[:, window_size:] = cumsum[:, window_size:] - cumsum[:, :-window_size]
-    counts = torch.arange(
-        1,
-        time_steps + 1,
-        device=values.device,
-        dtype=values.dtype,
-    ).clamp(max=window_size)
-    view_shape = [1, time_steps] + [1] * (values.ndim - 2)
-    return window_sums / counts.view(*view_shape)
+    means: list[torch.Tensor] = []
+    for time_index in range(time_steps):
+        start_index = max(0, time_index - window_size + 1)
+        window = values[:, start_index : time_index + 1]
+        means.append(window.mean(dim=1))
+    return torch.stack(means, dim=1)
 
 
 def build_local_causal_window_mask(

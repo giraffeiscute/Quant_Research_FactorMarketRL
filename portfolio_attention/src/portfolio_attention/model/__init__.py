@@ -13,6 +13,7 @@ from .cross_sectional import (
     CrossSectionalScoreResult,
     MLPCrossSectionalScorer,
 )
+from .critic import PortfolioCritic
 from .network import PortfolioAttentionModel
 from .task_head import AttentionPortfolioHead, MLPPortfolioHead, TaskHeadResult
 from .temp_encoders import MarketTemporalEncoder, StockTemporalEncoder
@@ -32,6 +33,7 @@ __all__ = [
     "MLPCrossSectionalScorer",
     "MLPPortfolioHead",
     "PortfolioAttentionModel",
+    "PortfolioCritic",
     "StockTemporalEncoder",
     "TaskHeadResult",
 ]

@@ -17,6 +17,7 @@ from .cross_sectional import (
     CrossSectionalScoreResult,
     MLPCrossSectionalScorer,
 )
+from .critic import PortfolioCritic
 from .stock_embedding import StockIdentityEmbedding
 from .temp_encoders import MarketTemporalEncoder, StockTemporalEncoder
 from .temporal_utils import build_sinusoidal_time_encoding
@@ -102,6 +103,7 @@ class PortfolioAttentionModel(nn.Module):
     The forward pass keeps `S` (scenario) and `T` (time) separate and returns:
     - `stock_weights`: [S, T, N]
     - `cash_weight`: [S, T]
+    - `value_prediction`: [S, T] when requested, otherwise None
     - `portfolio_return`: [S, T]
 
     To avoid future leakage, the model keeps scenario/time structure intact and
@@ -238,6 +240,16 @@ class PortfolioAttentionModel(nn.Module):
                 f"{self.stock_cross_sectional_encoder_type!r}."
             )
 
+        # Keep adding the critic from advancing the policy model's historical RNG sequence.
+        rng_state = torch.random.get_rng_state()
+        self.critic = PortfolioCritic(
+            stock_temporal_dim=config.stock_temporal_dim,
+            market_temporal_dim=config.market_temporal_dim,
+            hidden_dim=config.cross_sectional_dim,
+            dropout=config.dropout,
+        )
+        torch.random.set_rng_state(rng_state)
+
     def _load_from_state_dict(
         self,
         state_dict: dict[str, torch.Tensor],
@@ -249,6 +261,21 @@ class PortfolioAttentionModel(nn.Module):
         error_msgs: list[str],
     ) -> None:
         _remap_legacy_state_dict_keys(state_dict, module_prefix=prefix)
+        legacy_value_head_prefix = prefix + "value_head."
+        critic_value_head_prefix = prefix + "critic.value_head."
+        for key in list(state_dict.keys()):
+            if not key.startswith(legacy_value_head_prefix):
+                continue
+            new_key = critic_value_head_prefix + key[len(legacy_value_head_prefix) :]
+            if new_key not in state_dict:
+                state_dict[new_key] = state_dict[key]
+            del state_dict[key]
+        for key, value in self.state_dict().items():
+            if not key.startswith("critic."):
+                continue
+            full_key = prefix + key
+            if full_key not in state_dict:
+                state_dict[full_key] = value.detach().clone()
 
         super()._load_from_state_dict(
             state_dict,
@@ -280,6 +307,7 @@ class PortfolioAttentionModel(nn.Module):
         x_market: torch.Tensor,
         stock_indices: torch.Tensor,
         target_returns: torch.Tensor | None = None,
+        compute_value_prediction: bool = False,
     ) -> dict[str, Any]:
         if x_stock.ndim != 4:
             raise ValueError("x_stock must have shape [S, T, N, F_stock].")
@@ -389,6 +417,15 @@ class PortfolioAttentionModel(nn.Module):
         allocation_change_l2 = allocation_delta.pow(2).sum(dim=-1)
         stock_weights = allocation[..., :-1]
         cash_weight = allocation[..., -1]
+        value_prediction = None
+        if bool(compute_value_prediction):
+            value_prediction = self.critic(
+                stock_temporal_current=stock_temporal_current,
+                stock_temporal_summary=stock_temporal_summary,
+                market_current=market_current,
+                market_summary=market_summary,
+                previous_allocation=previous_allocation,
+            )
 
         portfolio_return = None
         if target_returns is not None:
@@ -431,6 +468,7 @@ class PortfolioAttentionModel(nn.Module):
             "allocation": allocation,
             "initial_allocation": initial_allocation,
             "previous_allocation": previous_allocation,
+            "value_prediction": value_prediction,
             "turnover": turnover,
             "allocation_change_l2": allocation_change_l2,
             "portfolio_return": portfolio_return,

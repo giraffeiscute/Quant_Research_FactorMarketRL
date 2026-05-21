@@ -179,6 +179,7 @@ def _build_monitoring_scenario_artifact(
         benchmark_excess_return=scenario_result.benchmark_metrics.benchmark_excess_return,
         benchmark_information_ratio=scenario_result.benchmark_metrics.benchmark_information_ratio,
         average_turnover=float(scenario_result.return_stats.average_turnover),
+        mean_cash_weight=float(scenario_result.cash_stats.mean_cash_weight),
         selected_stock_count=int(scenario_result.selection_stats.total_selected_stock_count),
         stock_count_weight_threshold=float(scenario_result.selection_stats.stock_count_weight_threshold),
     )
@@ -204,6 +205,7 @@ def _build_monitoring_scenario_artifact(
         "final_return": float(scenario_result.return_stats.final_return),
         "backtest_portfolio_sr": float(scenario_result.return_stats.backtest_portfolio_sr),
         "average_turnover": float(scenario_result.return_stats.average_turnover),
+        "mean_cash_weight": float(scenario_result.cash_stats.mean_cash_weight),
         "benchmark_market_index_csv": scenario_result.benchmark_metrics.benchmark_market_index_csv,
         "benchmark_excess_return": scenario_result.benchmark_metrics.benchmark_excess_return,
         "benchmark_information_ratio": scenario_result.benchmark_metrics.benchmark_information_ratio,
@@ -289,6 +291,10 @@ def _build_holdout_summary_payload(
         [float(item.return_stats.average_turnover) for item in scenario_results],
         dtype=np.float64,
     )
+    mean_cash_weights = np.asarray(
+        [float(item.cash_stats.mean_cash_weight) for item in scenario_results],
+        dtype=np.float64,
+    )
     best_index = int(final_returns.argmax())
     worst_index = int(final_returns.argmin())
     best_payload = scenario_results[best_index]
@@ -324,6 +330,7 @@ def _build_holdout_summary_payload(
         "num_holdout_scenarios": len(scenario_results),
         "mean_final_return": float(final_returns.mean()),
         "mean_average_turnover": float(average_turnovers.mean()),
+        "mean_cash_weight": float(mean_cash_weights.mean()),
         "std_final_return": float(final_returns.std(ddof=0)),
         "median_final_return": float(np.median(final_returns)),
         "worst_scenario_final_return": float(final_returns.min()),
@@ -485,6 +492,7 @@ def _export_scenario_payload(
         portfolio_return=float(scenario_result.return_stats.final_return),
         portfolio_sr=float(scenario_result.return_stats.backtest_portfolio_sr),
         average_turnover=float(scenario_result.return_stats.average_turnover),
+        mean_cash_weight=float(scenario_result.cash_stats.mean_cash_weight),
         selected_stock_count=total_selected_stock_count,
         stock_count_weight_threshold=stock_count_weight_threshold,
     )
@@ -562,6 +570,7 @@ def _export_scenario_payload(
         "final_return": float(scenario_result.return_stats.final_return),
         "backtest_portfolio_sr": float(scenario_result.return_stats.backtest_portfolio_sr),
         "average_turnover": float(scenario_result.return_stats.average_turnover),
+        "mean_cash_weight": float(scenario_result.cash_stats.mean_cash_weight),
         "benchmark_market_index_csv": scenario_result.benchmark_metrics.benchmark_market_index_csv,
         "benchmark_excess_return": scenario_result.benchmark_metrics.benchmark_excess_return,
         "benchmark_information_ratio": scenario_result.benchmark_metrics.benchmark_information_ratio,

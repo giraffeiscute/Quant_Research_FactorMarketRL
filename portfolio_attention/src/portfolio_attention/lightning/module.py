@@ -12,6 +12,7 @@ import torch
 from ..config import DataConfig, EvaluationConfig, ModelConfig, TrainConfig
 from ..config.validation import validated_evaluation_config, validated_train_config
 from ..data.dataset import PortfolioPanelDataset
+from ..evaluation.metrics import compute_portfolio_sr
 from ..training.engine import _run_loss_step, build_training_model
 from ..training.lr_scheduler import (
     build_lr_warmup_decay_scheduler,
@@ -74,19 +75,21 @@ class PortfolioLightningModule(pl.LightningModule):
         x_market: torch.Tensor,
         stock_indices: torch.Tensor,
         target_returns: torch.Tensor | None = None,
+        compute_value_prediction: bool = False,
     ) -> dict[str, Any]:
         return self.model(
             x_stock,
             x_market,
             stock_indices,
             target_returns=target_returns,
+            compute_value_prediction=compute_value_prediction,
         )
 
     def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
         if bool(self.train_config.rl_training.enabled):
             return self._training_step_rl(batch, batch_idx)
 
-        loss, _, summary = _run_loss_step(
+        loss, net_scored_returns, summary = _run_loss_step(
             self.model,
             batch,
             self.train_config.loss_name,
@@ -97,6 +100,7 @@ class PortfolioLightningModule(pl.LightningModule):
         train_mean_final_return = summary["scenario_final_returns"].mean()
         train_weight_loss = summary.get("weight_loss", loss.new_zeros(()))
         train_ot = summary.get("mean_turnover", loss.new_zeros(()))
+        train_sr = compute_portfolio_sr(net_scored_returns)
         batch_size = int(summary["scenario_final_returns"].numel())
         self._latest_train_diagnostics = self._build_train_diagnostics(
             loss=loss,
@@ -112,7 +116,7 @@ class PortfolioLightningModule(pl.LightningModule):
             batch_size=batch_size,
         )
         self._log_train_epoch_metric(
-            "train_OT",
+            "train_TO",
             train_ot,
             prog_bar=False,
             batch_size=batch_size,
@@ -120,6 +124,12 @@ class PortfolioLightningModule(pl.LightningModule):
         self._log_train_epoch_metric(
             "train_return",
             train_mean_final_return,
+            prog_bar=False,
+            batch_size=batch_size,
+        )
+        self._log_train_epoch_metric(
+            "train_SR",
+            train_sr,
             prog_bar=False,
             batch_size=batch_size,
         )
@@ -202,6 +212,7 @@ class PortfolioLightningModule(pl.LightningModule):
             loss_value=metrics["loss"],
             window_loss_value=metrics["window_loss"],
             window_count=metrics["window_count"],
+            scenario_sr=metrics["scenario_sr"],
             scenario_final_return=metrics["scenario_final_return"],
             selected_stock_count=metrics["selected_stock_count"],
             average_turnover=metrics["average_turnover"],
@@ -220,13 +231,18 @@ class PortfolioLightningModule(pl.LightningModule):
             prog_bar=True,
         )
         self._log_validation_epoch_metric(
+            "val_SR",
+            metrics["val_SR"],
+            prog_bar=False,
+        )
+        self._log_validation_epoch_metric(
             "val_stock",
             metrics["val_stock"],
             prog_bar=False,
         )
         self._log_validation_epoch_metric(
-            "val_OT",
-            metrics["val_OT"],
+            "val_TO",
+            metrics["val_TO"],
             prog_bar=False,
         )
         self._log_validation_epoch_metric(

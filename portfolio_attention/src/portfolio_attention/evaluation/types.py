@@ -52,6 +52,7 @@ class ScenarioExportArtifact(TypedDict):
     benchmark_excess_return: NotRequired[float | None]
     benchmark_information_ratio: NotRequired[float | None]
     average_turnover: NotRequired[float]
+    mean_cash_weight: NotRequired[float]
 
 
 class MonitoringScenarioArtifact(TypedDict):
@@ -67,6 +68,7 @@ class MonitoringScenarioArtifact(TypedDict):
     benchmark_excess_return: NotRequired[float | None]
     benchmark_information_ratio: NotRequired[float | None]
     average_turnover: NotRequired[float]
+    mean_cash_weight: NotRequired[float]
     evaluation_mode: NotRequired[str | None]
     rolling_window_lookback_days: NotRequired[int | None]
     rolling_window_horizon_days: NotRequired[int | None]
@@ -83,6 +85,7 @@ class HoldoutSummary(TypedDict):
     num_holdout_scenarios: int
     mean_final_return: float
     mean_average_turnover: float
+    mean_cash_weight: float
     std_final_return: float
     median_final_return: float
     worst_scenario_final_return: float

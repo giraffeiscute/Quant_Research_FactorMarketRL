@@ -466,9 +466,11 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             f"received {config.enabled!r}."
         )
     config.algorithm = str(config.algorithm).strip().lower()  # type: ignore[assignment]
-    if config.algorithm != "grpo_like":
+    valid_algorithms = {"grpo_like", "single_epoch_rollout_ppo"}
+    if config.algorithm not in valid_algorithms:
         raise ValueError(
-            "TrainConfig.rl_training.algorithm must be 'grpo_like', "
+            "TrainConfig.rl_training.algorithm must be one of "
+            f"{sorted(valid_algorithms)}, "
             f"received {config.algorithm!r}."
         )
 
@@ -479,6 +481,11 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             "TrainConfig.rl_training.reward_type must be one of "
             f"{sorted(valid_reward_types)}, "
             f"received {config.reward_type!r}."
+        )
+    if config.algorithm == "single_epoch_rollout_ppo" and config.reward_type != "return":
+        raise ValueError(
+            "single_epoch_rollout_ppo currently requires reward_type='return'. "
+            f"Received {config.reward_type!r}."
         )
 
     config.warmup_allocation_mode = str(config.warmup_allocation_mode).strip().lower()  # type: ignore[assignment]
@@ -521,6 +528,42 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
         raise ValueError(
             "TrainConfig.rl_training.entropy_coef must be non-negative, "
             f"received {config.entropy_coef}."
+        )
+
+    config.ppo_clip_range = float(config.ppo_clip_range)
+    if config.ppo_clip_range <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.ppo_clip_range must be > 0, "
+            f"received {config.ppo_clip_range}."
+        )
+
+    config.value_loss_coef = float(config.value_loss_coef)
+    if config.value_loss_coef < 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.value_loss_coef must be non-negative, "
+            f"received {config.value_loss_coef}."
+        )
+
+    config.ppo_num_epochs = int(config.ppo_num_epochs)
+    if config.algorithm == "single_epoch_rollout_ppo" and config.ppo_num_epochs != 1:
+        raise ValueError(
+            "TrainConfig.rl_training.ppo_num_epochs must be 1 for "
+            "single_epoch_rollout_ppo; this algorithm does not support "
+            "multi-epoch PPO updates yet. "
+            f"Received {config.ppo_num_epochs}."
+        )
+
+    config.ppo_gamma = float(config.ppo_gamma)
+    if config.ppo_gamma < 0.0 or config.ppo_gamma > 1.0:
+        raise ValueError(
+            "TrainConfig.rl_training.ppo_gamma must be in [0, 1], "
+            f"received {config.ppo_gamma}."
+        )
+
+    if not isinstance(config.normalize_rollout_advantages, bool):
+        raise ValueError(
+            "TrainConfig.rl_training.normalize_rollout_advantages must be a bool, "
+            f"received {config.normalize_rollout_advantages!r}."
         )
 
     config.alpha_min = float(config.alpha_min)

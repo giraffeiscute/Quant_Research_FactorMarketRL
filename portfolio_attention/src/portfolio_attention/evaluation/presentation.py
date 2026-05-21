@@ -653,6 +653,7 @@ def build_chart_metrics_text(
     benchmark_excess_return: float | None = None,
     benchmark_information_ratio: float | None = None,
     average_turnover: float | None = None,
+    mean_cash_weight: float | None = None,
     selected_stock_count: int | None = None,
     stock_count_weight_threshold: float | None = None,
 ) -> str:
@@ -663,6 +664,7 @@ def build_chart_metrics_text(
         benchmark_excess_return=benchmark_excess_return,
         benchmark_information_ratio=benchmark_information_ratio,
         average_turnover=average_turnover,
+        mean_cash_weight=mean_cash_weight,
         selected_stock_count=selected_stock_count,
         stock_count_weight_threshold=stock_count_weight_threshold,
     )

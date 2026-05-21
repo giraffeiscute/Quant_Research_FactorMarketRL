@@ -203,17 +203,26 @@ class EvaluationConfig:
 
 @dataclass
 class RLTrainingConfig:
-    """RL-specific training knobs (disabled by default)."""
+    """RL-specific training knobs (disabled by default).
+
+    ``single_epoch_rollout_ppo`` is a single-update sampled rolling PPO path. It
+    intentionally has no GAE, rollout buffer, or multi-epoch minibatch updates.
+    """
 
     enabled: bool = False
-    algorithm: Literal["grpo_like"] = "grpo_like"
+    algorithm: Literal["grpo_like", "single_epoch_rollout_ppo"] = "grpo_like"
     reward_type: Literal["dsr_day_last", "rolling_sharpe", "return", "win_rate"] = "dsr_day_last"
-    group_size: int = 10
+    group_size: int = 128
     warmup_allocation_mode: Literal["deterministic_mean"] = "deterministic_mean"
     dsr_var_eps: float = 1e-8
     reward_scale: float = 1.0
     reward_clip: float = 5.0
     entropy_coef: float = 0.001
+    ppo_clip_range: float = 0.2
+    value_loss_coef: float = 0.5
+    ppo_num_epochs: int = 1
+    ppo_gamma: float = 0.99
+    normalize_rollout_advantages: bool = True
     alpha_min: float = 0.05
     alpha_max: float = 50.0
     rl_post_train_evidence_scale: float = 0.3

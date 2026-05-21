@@ -336,6 +336,9 @@ def _rebuild_monitoring_holdout_backtest_directory(
                     artifact.get("benchmark_information_ratio")
                 ),
                 average_turnover=average_turnover,
+                mean_cash_weight=evaluation_shared.coerce_optional_float(
+                    artifact.get("mean_cash_weight")
+                ),
                 selected_stock_count=total_selected_stock_count,
                 stock_count_weight_threshold=stock_count_weight_threshold,
             )
@@ -595,6 +598,9 @@ def rebuild_multi_loss_weight_trajectory_overviews(
                     ),
                     average_turnover=evaluation_shared.coerce_optional_float(
                         payload.get("average_turnover")
+                    ),
+                    mean_cash_weight=evaluation_shared.coerce_optional_float(
+                        payload.get("mean_cash_weight")
                     ),
                     selected_stock_count=total_selected_stock_count,
                     stock_count_weight_threshold=stock_count_weight_threshold,

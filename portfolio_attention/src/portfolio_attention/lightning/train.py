@@ -210,6 +210,18 @@ def _resolve_lightning_trainer_devices(
     return resolve_lightning_cuda_devices(devices)
 
 
+def _resolve_lightning_strategy(train_config: TrainConfig, resolved_gpu_ids: list[int]) -> str:
+    if len(resolved_gpu_ids) <= 1:
+        return "auto"
+
+    rl_config = train_config.rl_training
+    algorithm = str(getattr(rl_config, "algorithm", "")).strip().lower()
+    if bool(getattr(rl_config, "enabled", False)) and algorithm == "single_epoch_rollout_ppo":
+        return "ddp"
+
+    return "ddp_find_unused_parameters_true"
+
+
 def _build_parser() -> argparse.ArgumentParser:
     from portfolio_attention.cli.lightning_train import _build_parser as _cli_build_parser
 
@@ -439,7 +451,7 @@ def _build_single_state_training_stack(
         accelerator="gpu",
         devices=trainer_devices,
         num_nodes=1,
-        strategy=("ddp" if len(resolved_gpu_ids) > 1 else "auto"),
+        strategy=_resolve_lightning_strategy(train_config, resolved_gpu_ids),
         max_epochs=int(train_config.num_epochs),
         gradient_clip_val=float(train_config.grad_clip_norm),
         callbacks=callbacks,

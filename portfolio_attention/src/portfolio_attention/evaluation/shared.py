@@ -190,6 +190,7 @@ def build_chart_metrics_text(
     benchmark_excess_return: float | None = None,
     benchmark_information_ratio: float | None = None,
     average_turnover: float | None = None,
+    mean_cash_weight: float | None = None,
     selected_stock_count: int | None = None,
     stock_count_weight_threshold: float | None = None,
 ) -> str:
@@ -202,6 +203,8 @@ def build_chart_metrics_text(
     ]
     if average_turnover is not None:
         lines.append(f"Avg Turnover: {float(average_turnover):.4f}")
+    if mean_cash_weight is not None:
+        lines.append(f"Avg Cash: {float(mean_cash_weight):.4f}")
     if selected_stock_count is not None:
         if stock_count_weight_threshold is None:
             raise ValueError("stock_count_weight_threshold is required when selected_stock_count is provided.")

@@ -12,7 +12,11 @@ from . import presentation as evaluation_presentation
 from . import shared as evaluation_shared
 from ..config import EvaluationConfig
 from ..data.dataset import PortfolioPanelDataset
-from .metrics import apply_transaction_cost_to_returns, compute_average_turnover_from_weights
+from .metrics import (
+    apply_transaction_cost_to_returns,
+    compute_average_turnover_from_weights,
+    compute_portfolio_sr,
+)
 from .types import (
     BenchmarkMetrics,
     RuntimePayloadAdapter,
@@ -24,7 +28,6 @@ from .types import (
     ScenarioSelectionStats,
     ScenarioWindowMeta,
 )
-from ..model.losses import sharpe_loss
 
 EXPORTED_TRAIN_CONFIG_KEYS = [
     "num_epochs",
@@ -51,7 +54,7 @@ def extract_exported_train_config(checkpoint: dict[str, Any]) -> dict[str, objec
 
 
 def compute_backtest_portfolio_sr(portfolio_returns: torch.Tensor) -> float:
-    return float((-sharpe_loss(portfolio_returns.detach().cpu()).item()))
+    return compute_portfolio_sr(portfolio_returns.detach().cpu())
 
 
 def compute_average_turnover(stock_weights: torch.Tensor, cash_weights: torch.Tensor) -> float:
@@ -348,4 +351,3 @@ def build_scenario_eval_result(
 
 def build_legacy_per_scenario_payload(**kwargs: Any) -> dict[str, Any]:
     return RuntimePayloadAdapter.to_legacy_payload(build_scenario_eval_result(**kwargs))
-

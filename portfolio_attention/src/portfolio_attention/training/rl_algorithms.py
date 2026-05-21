@@ -66,3 +66,47 @@ def compute_grpo_like_policy_loss(
         entropy_normalizer=entropy_normalizer,
     )
     return policy_loss, advantages
+
+
+def compute_ppo_clipped_policy_loss(
+    new_log_probs: torch.Tensor,
+    old_log_probs: torch.Tensor,
+    advantages: torch.Tensor,
+    clip_range: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if tuple(new_log_probs.shape) != tuple(old_log_probs.shape):
+        raise ValueError(
+            "new_log_probs and old_log_probs must share the same shape. "
+            f"Received new_log_probs={tuple(new_log_probs.shape)} "
+            f"old_log_probs={tuple(old_log_probs.shape)}."
+        )
+    if tuple(new_log_probs.shape) != tuple(advantages.shape):
+        raise ValueError(
+            "new_log_probs and advantages must share the same shape. "
+            f"Received new_log_probs={tuple(new_log_probs.shape)} "
+            f"advantages={tuple(advantages.shape)}."
+        )
+    clip_value = float(clip_range)
+    if clip_value <= 0.0:
+        raise ValueError(f"clip_range must be > 0, received {clip_range}.")
+
+    ratio = torch.exp(new_log_probs - old_log_probs)
+    clipped_ratio = torch.clamp(ratio, min=1.0 - clip_value, max=1.0 + clip_value)
+    detached_advantages = advantages.detach()
+    unclipped_objective = ratio * detached_advantages
+    clipped_objective = clipped_ratio * detached_advantages
+    policy_loss = -torch.minimum(unclipped_objective, clipped_objective).mean()
+    clip_fraction = (torch.abs(ratio - 1.0) > clip_value).to(dtype=ratio.dtype).mean()
+    return policy_loss, ratio, clip_fraction
+
+
+def compute_value_loss(
+    values: torch.Tensor,
+    value_targets: torch.Tensor,
+) -> torch.Tensor:
+    if tuple(values.shape) != tuple(value_targets.shape):
+        raise ValueError(
+            "values and value_targets must share the same shape. "
+            f"Received values={tuple(values.shape)} value_targets={tuple(value_targets.shape)}."
+        )
+    return 0.5 * (values - value_targets.detach()).pow(2).mean()

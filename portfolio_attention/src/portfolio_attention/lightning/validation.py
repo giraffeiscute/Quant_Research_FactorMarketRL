@@ -12,6 +12,7 @@ from ..data.dataset import PortfolioPanelDataset
 from ..evaluation.metrics import (
     apply_transaction_cost_to_returns,
     compute_average_turnover_from_weights,
+    compute_portfolio_sr,
     compute_selected_stock_count_from_weights,
 )
 from ..evaluation.runtime import (
@@ -184,6 +185,7 @@ def compute_validation_scenario_metrics(
         transaction_cost_rate=evaluation_transaction_cost_rate,
     ).unsqueeze(0)
     loss = build_loss(loss_name, scored_returns)
+    scenario_sr = compute_portfolio_sr(scored_returns)
     window_loss, window_count = _compute_validation_window_objective_loss(
         model=model,
         dataset=dataset,
@@ -240,6 +242,7 @@ def compute_validation_scenario_metrics(
         "loss": loss.detach(),
         "window_loss": window_loss.detach(),
         "window_count": window_count,
+        "scenario_sr": scenario_sr,
         "scenario_final_return": scenario_final_return.detach(),
         "selected_stock_count": selected_stock_count,
         "average_turnover": average_turnover,
@@ -258,6 +261,7 @@ class ScenarioRollingValidationMetric(Metric):
         super().__init__()
         self.add_state("loss_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("window_loss_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("sr_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("final_return_sum", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("scenario_count", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum")
         self.add_state("window_count", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum")
@@ -277,6 +281,7 @@ class ScenarioRollingValidationMetric(Metric):
         loss_value: torch.Tensor | float,
         window_loss_value: torch.Tensor | float,
         window_count: torch.Tensor | int,
+        scenario_sr: torch.Tensor | float,
         scenario_final_return: torch.Tensor | float,
         selected_stock_count: torch.Tensor | int | float,
         average_turnover: torch.Tensor | float,
@@ -296,6 +301,11 @@ class ScenarioRollingValidationMetric(Metric):
             device=self.window_loss_sum.device,
             dtype=self.window_loss_sum.dtype,
         ) * window_count_tensor.to(dtype=self.window_loss_sum.dtype)
+        self.sr_sum += torch.as_tensor(
+            scenario_sr,
+            device=self.sr_sum.device,
+            dtype=self.sr_sum.dtype,
+        )
         self.final_return_sum += torch.as_tensor(
             scenario_final_return,
             device=self.final_return_sum.device,
@@ -339,10 +349,11 @@ class ScenarioRollingValidationMetric(Metric):
             return {
                 "val_loss": zero,
                 "val_loss_window": zero,
+                "val_SR": zero,
                 "val_return": zero,
                 "val_mean_final_return": zero,
                 "val_stock": zero,
-                "val_OT": zero,
+                "val_TO": zero,
                 "val_cash": zero,
                 "val_win_rate": zero,
             }
@@ -355,10 +366,11 @@ class ScenarioRollingValidationMetric(Metric):
         return {
             "val_loss": self.loss_sum / scenario_count,
             "val_loss_window": val_loss_window,
+            "val_SR": self.sr_sum / scenario_count,
             "val_return": self.final_return_sum / scenario_count,
             "val_mean_final_return": self.final_return_sum / scenario_count,
             "val_stock": self.selected_stock_count_sum / scenario_count,
-            "val_OT": self.average_turnover_sum / scenario_count,
+            "val_TO": self.average_turnover_sum / scenario_count,
             "val_cash": self.mean_cash_weight_sum / scenario_count,
             "val_win_rate": (
                 self.loss_sum.new_zeros(())
