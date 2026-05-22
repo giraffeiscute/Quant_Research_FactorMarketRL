@@ -21,6 +21,7 @@ from ..common.utils import (
 from ..config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
 from ..config.validation import (
     validate_train_config_against_data_config,
+    validate_train_config_against_model_config,
     validated_data_config,
     validated_model_config,
     validated_train_config,
@@ -469,6 +470,7 @@ def run_epoch_training(
             "TrainConfig.post_train_from is only supported by portfolio_attention.cli.lightning_train."
         )
     validate_train_config_against_data_config(train_config, data_config)
+    validate_train_config_against_model_config(train_config, model_config)
     ensure_output_dirs(paths)
     save_runtime_config_artifact(
         paths=paths,

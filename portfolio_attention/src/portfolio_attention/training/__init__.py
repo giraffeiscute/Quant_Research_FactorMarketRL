@@ -5,7 +5,6 @@ __all__ = [
     "finalization",
     "monitoring",
     "orchestration",
-    "rl_algorithms",
     "rl_engine",
     "status",
 ]

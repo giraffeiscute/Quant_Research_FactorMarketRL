@@ -113,6 +113,23 @@ def validate_train_config_against_data_config(
         )
 
 
+def validate_train_config_against_model_config(
+    train_config: TrainConfig,
+    model_config: ModelConfig,
+) -> None:
+    rl_config = train_config.rl_training
+    algorithm = str(getattr(rl_config, "algorithm", "")).strip().lower()
+    if (
+        bool(getattr(rl_config, "enabled", False))
+        and algorithm == "rollout_ppo"
+        and bool(getattr(model_config, "use_prev_weight_feature", False))
+    ):
+        raise ValueError(
+            "rollout_ppo currently requires ModelConfig.use_prev_weight_feature=False "
+            "so the frozen PPO rollout state is not conditioned on previous weights."
+        )
+
+
 def validated_evaluation_config(config: EvaluationConfig) -> EvaluationConfig:
     resolved = replace(config)
     validate_evaluation_config(resolved)
@@ -466,14 +483,16 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             f"received {config.enabled!r}."
         )
     config.algorithm = str(config.algorithm).strip().lower()  # type: ignore[assignment]
-    valid_algorithms = {"grpo_like", "single_epoch_rollout_ppo", "multi_epoch_rollout_ppo"}
+    valid_algorithms = {
+        "grpo_like",
+        "rollout_ppo",
+    }
     if config.algorithm not in valid_algorithms:
         raise ValueError(
             "TrainConfig.rl_training.algorithm must be one of "
             f"{sorted(valid_algorithms)}, "
             f"received {config.algorithm!r}."
         )
-
     config.reward_type = str(config.reward_type).strip().lower()  # type: ignore[assignment]
     valid_reward_types = {"dsr_day_last", "rolling_sharpe", "return", "win_rate"}
     if config.reward_type not in valid_reward_types:
@@ -482,10 +501,9 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             f"{sorted(valid_reward_types)}, "
             f"received {config.reward_type!r}."
         )
-    rollout_ppo_algorithms = {"single_epoch_rollout_ppo", "multi_epoch_rollout_ppo"}
-    if config.algorithm in rollout_ppo_algorithms and config.reward_type != "return":
+    if config.algorithm == "rollout_ppo" and config.reward_type != "return":
         raise ValueError(
-            f"{config.algorithm} currently requires reward_type='return'. "
+            "rollout_ppo currently requires reward_type='return'. "
             f"Received {config.reward_type!r}."
         )
 
@@ -546,17 +564,9 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
         )
 
     config.ppo_num_epochs = int(config.ppo_num_epochs)
-    if config.algorithm == "single_epoch_rollout_ppo" and config.ppo_num_epochs != 1:
+    if config.ppo_num_epochs < 1:
         raise ValueError(
-            "TrainConfig.rl_training.ppo_num_epochs must be 1 for "
-            "single_epoch_rollout_ppo; this algorithm does not support "
-            "multi-epoch PPO updates yet. "
-            f"Received {config.ppo_num_epochs}."
-        )
-    if config.algorithm == "multi_epoch_rollout_ppo" and config.ppo_num_epochs <= 0:
-        raise ValueError(
-            "TrainConfig.rl_training.ppo_num_epochs must be positive for "
-            "multi_epoch_rollout_ppo. "
+            "TrainConfig.rl_training.ppo_num_epochs must be >= 1. "
             f"Received {config.ppo_num_epochs}."
         )
 

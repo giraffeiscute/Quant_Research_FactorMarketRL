@@ -10,7 +10,11 @@ import lightning.pytorch as pl
 import torch
 
 from ..config import DataConfig, EvaluationConfig, ModelConfig, TrainConfig
-from ..config.validation import validated_evaluation_config, validated_train_config
+from ..config.validation import (
+    validate_train_config_against_model_config,
+    validated_evaluation_config,
+    validated_train_config,
+)
 from ..data.dataset import PortfolioPanelDataset
 from ..evaluation.metrics import compute_portfolio_sr
 from ..training.engine import _run_loss_step, build_training_model
@@ -54,6 +58,7 @@ class PortfolioLightningModule(pl.LightningModule):
         self.data_config = data_config
         self.model_config = model_config
         self.train_config = validated_train_config(train_config)
+        self._validate_rollout_ppo_model_config()
         self.evaluation_config = validated_evaluation_config(evaluation_config or EvaluationConfig())
         self.dataset = dataset
         self.stock_count_weight_threshold = float(stock_count_weight_threshold)
@@ -143,7 +148,7 @@ class PortfolioLightningModule(pl.LightningModule):
 
     def _training_step_rl(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
         if self._uses_manual_rollout_ppo():
-            return self._training_step_multi_epoch_rollout_ppo(batch, batch_idx)
+            return self._training_step_rollout_ppo(batch, batch_idx)
 
         result = run_rl_policy_step(
             self.model,
@@ -165,9 +170,10 @@ class PortfolioLightningModule(pl.LightningModule):
                 prog_bar=(metric_name == "train_policy_loss"),
                 batch_size=result.batch_size,
             )
+        self._log_current_learning_rate(batch_size=result.batch_size)
         return result.policy_loss
 
-    def _training_step_multi_epoch_rollout_ppo(
+    def _training_step_rollout_ppo(
         self,
         batch: dict[str, Any],
         batch_idx: int,
@@ -184,8 +190,7 @@ class PortfolioLightningModule(pl.LightningModule):
         )
         last_loss: torch.Tensor | None = None
         ppo_num_epochs = int(self.train_config.rl_training.ppo_num_epochs)
-        for _ppo_epoch in range(ppo_num_epochs):
-            optimizer.zero_grad()
+        for ppo_epoch in range(1, ppo_num_epochs + 1):
             ppo_update = run_rollout_ppo_update(
                 self.model,
                 batch,
@@ -208,8 +213,13 @@ class PortfolioLightningModule(pl.LightningModule):
                 )
             optimizer.step()
             self._step_manual_scheduler(scheduler)
+            optimizer.zero_grad()
 
-            metrics = build_rollout_ppo_update_metrics(collected.ppo_batch, ppo_update)
+            metrics = build_rollout_ppo_update_metrics(
+                collected.ppo_batch,
+                ppo_update,
+                ppo_epoch=ppo_epoch,
+            )
             for metric_name, metric_value in metrics.items():
                 self._log_train_epoch_metric(
                     metric_name,
@@ -217,10 +227,11 @@ class PortfolioLightningModule(pl.LightningModule):
                     prog_bar=(metric_name == "train_policy_loss"),
                     batch_size=collected.batch_size,
                 )
+            self._log_current_learning_rate(batch_size=collected.batch_size)
             last_loss = ppo_update.policy_loss
 
         if last_loss is None:
-            raise RuntimeError("multi_epoch_rollout_ppo requires ppo_num_epochs >= 1.")
+            raise RuntimeError("rollout_ppo requires ppo_num_epochs >= 1.")
         return last_loss.detach()
 
     @staticmethod
@@ -367,6 +378,29 @@ class PortfolioLightningModule(pl.LightningModule):
             sync_dist=False,
         )
 
+    def _log_current_learning_rate(self, *, batch_size: int) -> None:
+        lr_value = self._current_learning_rate()
+        if lr_value is None:
+            return
+        self._log_train_epoch_metric(
+            "lr",
+            lr_value,
+            prog_bar=False,
+            batch_size=batch_size,
+        )
+
+    def _current_learning_rate(self) -> float | None:
+        try:
+            optimizers = getattr(self.trainer, "optimizers", None)
+        except RuntimeError:
+            optimizers = None
+        if optimizers:
+            optimizer = optimizers[0]
+            param_groups = getattr(optimizer, "param_groups", None)
+            if param_groups:
+                return float(param_groups[0]["lr"])
+        return float(self.train_config.learning_rate)
+
     def _build_train_diagnostics(
         self,
         *,
@@ -459,9 +493,16 @@ class PortfolioLightningModule(pl.LightningModule):
     def _uses_manual_rollout_ppo(self) -> bool:
         rl_config = self.train_config.rl_training
         algorithm = str(getattr(rl_config, "algorithm", "")).strip().lower()
-        return bool(getattr(rl_config, "enabled", False)) and algorithm == "multi_epoch_rollout_ppo"
+        return (
+            bool(getattr(rl_config, "enabled", False))
+            and algorithm == "rollout_ppo"
+            and int(getattr(rl_config, "ppo_num_epochs", 1)) > 1
+        )
 
     def _optimizer_steps_per_training_batch(self) -> int:
         if self._uses_manual_rollout_ppo():
             return max(1, int(self.train_config.rl_training.ppo_num_epochs))
         return 1
+
+    def _validate_rollout_ppo_model_config(self) -> None:
+        validate_train_config_against_model_config(self.train_config, self.model_config)

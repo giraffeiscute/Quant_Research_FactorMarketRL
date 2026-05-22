@@ -205,13 +205,13 @@ class EvaluationConfig:
 class RLTrainingConfig:
     """RL-specific training knobs (disabled by default).
 
-    ``single_epoch_rollout_ppo`` is a single-update sampled rolling PPO path.
-    ``multi_epoch_rollout_ppo`` collects one rollout batch and reuses it for
-    multiple PPO optimizer updates.
+    ``rollout_ppo`` collects one rollout batch and reuses the
+    frozen rollout for ``ppo_num_epochs`` PPO optimizer updates. Setting
+    ``ppo_num_epochs=1`` preserves the single-update PPO behavior.
     """
 
     enabled: bool = False
-    algorithm: Literal["grpo_like", "single_epoch_rollout_ppo", "multi_epoch_rollout_ppo"] = "grpo_like"
+    algorithm: Literal["grpo_like", "rollout_ppo"] = "grpo_like"
     reward_type: Literal["dsr_day_last", "rolling_sharpe", "return", "win_rate"] = "dsr_day_last"
     group_size: int = 128
     warmup_allocation_mode: Literal["deterministic_mean"] = "deterministic_mean"

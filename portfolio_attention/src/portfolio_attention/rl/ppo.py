@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import torch
 
 from ..config import ModelConfig, TrainConfig
-from ..training import rl_algorithms
+from . import algorithms as rl_algorithms
 from .distributions import RolloutPPOPolicyScoring, compute_dirichlet_log_probs_from_logits
 from .rollout import sample_rollout_path
 from .rollout_targets import (
@@ -44,6 +44,7 @@ class RolloutPPOUpdateResult:
     entropy_loss: torch.Tensor
     ppo_ratio: torch.Tensor
     ppo_clip_fraction: torch.Tensor
+    approx_kl: torch.Tensor
     policy_scoring: RolloutPPOPolicyScoring
     scored_value_prediction: torch.Tensor
 
@@ -124,6 +125,8 @@ def compute_rollout_ppo_update_loss(
         ppo_batch.advantages,
         clip_range=float(train_config.rl_training.ppo_clip_range),
     )
+    log_ratio = policy_scoring.new_log_probs - ppo_batch.old_log_probs
+    approx_kl = ((torch.exp(log_ratio) - 1.0) - log_ratio).mean().detach()
     value_loss = rl_algorithms.compute_value_loss(
         scored_value_prediction,
         ppo_batch.targets.detach(),
@@ -140,6 +143,7 @@ def compute_rollout_ppo_update_loss(
         entropy_loss=entropy_loss,
         ppo_ratio=ppo_ratio,
         ppo_clip_fraction=ppo_clip_fraction,
+        approx_kl=approx_kl,
         policy_scoring=policy_scoring,
         scored_value_prediction=scored_value_prediction,
     )
@@ -148,6 +152,8 @@ def compute_rollout_ppo_update_loss(
 def build_rollout_ppo_update_metrics(
     ppo_batch: RolloutPPOBatch,
     ppo_update: RolloutPPOUpdateResult,
+    *,
+    ppo_epoch: int = 1,
 ) -> dict[str, torch.Tensor | float]:
     policy_scoring = ppo_update.policy_scoring
     entropy_per_dim = policy_scoring.entropy / float(policy_scoring.alpha.shape[-1])
@@ -173,8 +179,10 @@ def build_rollout_ppo_update_metrics(
         "train_rollout_target_std": ppo_batch.targets.detach().std(unbiased=False),
         "train_rollout_advantage_mean": ppo_batch.advantages.detach().mean(),
         "train_rollout_advantage_std": ppo_batch.advantages.detach().std(unbiased=False),
+        "train_rollout_ppo_epoch": float(ppo_epoch),
         "train_rollout_ppo_ratio_mean": ppo_update.ppo_ratio.detach().mean(),
         "train_rollout_ppo_clip_fraction": ppo_update.ppo_clip_fraction.detach(),
+        "train_rollout_ppo_approx_kl": ppo_update.approx_kl.detach(),
         "train_rollout_entropy_per_dim": entropy_per_dim.detach().mean(),
         "train_rollout_total_loss": ppo_update.policy_loss.detach(),
         "train_rollout_reward_base": ppo_batch.sampled_base_rewards.detach().mean(),

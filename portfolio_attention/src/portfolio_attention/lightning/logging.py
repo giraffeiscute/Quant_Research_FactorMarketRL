@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 from typing import Any
 
 from lightning_fabric.loggers.logger import rank_zero_experiment
 from lightning.pytorch.loggers.csv_logs import CSVLogger, ExperimentWriter
+from lightning.pytorch.loggers.logger import Logger
 import torch
 
 
@@ -29,49 +31,138 @@ PREFERRED_METRIC_KEY_ORDER = [
     "val_stock",
     "val_cash",
     "val_win_rate",
+    "lr",
 ]
-RL_PREFERRED_METRIC_KEY_ORDER = [
+GRPO_PREFERRED_METRIC_KEY_ORDER = [
     "epoch",
     "step",
-    "train_policy_loss",
-    "train_entropy_loss",
-    "train_entropy_per_dim",
-    "train_alpha_min",
-    "train_alpha_max",
-    "train_alpha_mean",
-    "train_reward_base",
-    "train_reward_final",
-    "train_reward_TO_penalty",
-    "train_advantage_mean",
-    "train_advantage_std",
-    "train_log_prob_mean",
-    "train_log_prob_std",
-    "train_rollout_value_loss",
-    "train_rollout_target_mean",
-    "train_rollout_target_std",
-    "train_rollout_advantage_mean",
-    "train_rollout_advantage_std",
-    "train_rollout_ppo_ratio_mean",
-    "train_rollout_ppo_clip_fraction",
-    "train_rollout_entropy_per_dim",
-    "train_rollout_total_loss",
-    "train_rollout_reward_base",
-    "train_rollout_reward_final",
-    "train_rollout_reward_TO_penalty",
-    "train_rollout_return",
-    "train_rollout_TO",
-    "train_rollout_final_returns",
+    "train_loss",
+    "train_weight_loss",
     "train_TO",
     "train_return",
-    "train_SR",
     "val_loss",
+    "val_loss_window",
     "val_return",
-    "val_SR",
     "val_TO",
     "val_stock",
     "val_cash",
     "val_win_rate",
+    "lr",
 ]
+GRPO_INCLUDED_METRIC_KEYS = set(GRPO_PREFERRED_METRIC_KEY_ORDER)
+RL_PREFERRED_METRIC_KEY_ORDER = [
+    "epoch",
+    "step",
+    "train_rollout_total_loss",
+    "train_policy_loss",
+    "train_rollout_value_loss",
+    "train_rollout_ppo_ratio_mean",
+    "train_rollout_ppo_clip_fraction",
+    "train_rollout_ppo_approx_kl",
+    "train_reward_final",
+    "train_return",
+    "train_TO",
+    "val_loss",
+    "val_return",
+    "val_SR",
+    "val_TO",
+    "val_win_rate",
+    "train_rollout_ppo_epoch",
+    "val_stock",
+    "val_cash",
+    "lr",
+]
+RL_INCLUDED_METRIC_KEYS = set(RL_PREFERRED_METRIC_KEY_ORDER)
+
+
+@dataclass(frozen=True)
+class MetricFilterConfig:
+    """Metric selection shared by CSV and external loggers."""
+
+    preferred_metric_key_order: list[str] | None = None
+    excluded_metric_keys: set[str] | None = None
+    included_metric_keys: set[str] | None = None
+
+    def filter(self, metrics_dict: dict[str, Any]) -> dict[str, Any]:
+        return filter_metric_keys(
+            metrics_dict,
+            excluded_metric_keys=self.excluded_metric_keys,
+            included_metric_keys=self.included_metric_keys,
+        )
+
+
+def filter_metric_keys(
+    metrics_dict: dict[str, Any],
+    *,
+    excluded_metric_keys: set[str] | None = None,
+    included_metric_keys: set[str] | None = None,
+) -> dict[str, Any]:
+    excluded = set(excluded_metric_keys or set())
+    included = set(included_metric_keys) if included_metric_keys is not None else None
+    return {
+        key: value
+        for key, value in metrics_dict.items()
+        if key not in excluded and (included is None or key in included)
+    }
+
+
+class MetricFilteringLogger(Logger):
+    """Logger adapter that keeps metric filtering out of training code."""
+
+    def __init__(
+        self,
+        logger: Logger,
+        *,
+        metric_filter: MetricFilterConfig | None = None,
+    ) -> None:
+        super().__init__()
+        self.logger = logger
+        self.metric_filter = metric_filter or MetricFilterConfig()
+
+    @property
+    def name(self) -> str | None:
+        return getattr(self.logger, "name", None)
+
+    @property
+    def version(self) -> str | int | None:
+        return getattr(self.logger, "version", None)
+
+    @property
+    @rank_zero_experiment
+    def experiment(self) -> Any:
+        return self.logger.experiment
+
+    def log_hyperparams(self, params: Any, *args: Any, **kwargs: Any) -> None:
+        self.logger.log_hyperparams(params, *args, **kwargs)
+
+    def log_metrics(self, metrics: dict[str, Any], step: int | None = None) -> None:
+        filtered = self.metric_filter.filter(metrics)
+        if filtered:
+            self.logger.log_metrics(filtered, step=step)
+
+    @property
+    def excluded_metric_keys(self) -> set[str]:
+        return set(self.metric_filter.excluded_metric_keys or set())
+
+    @property
+    def included_metric_keys(self) -> set[str] | None:
+        if self.metric_filter.included_metric_keys is None:
+            return None
+        return set(self.metric_filter.included_metric_keys)
+
+    def save(self) -> None:
+        self.logger.save()
+
+    def finalize(self, status: str) -> None:
+        self.logger.finalize(status)
+
+    def after_save_checkpoint(self, checkpoint_callback: Any) -> None:
+        hook = getattr(self.logger, "after_save_checkpoint", None)
+        if hook is not None:
+            hook(checkpoint_callback)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.logger, name)
 
 
 class RoundedMetricsExperimentWriter(ExperimentWriter):
@@ -83,17 +174,17 @@ class RoundedMetricsExperimentWriter(ExperimentWriter):
         *,
         decimal_places: int = CSV_METRIC_DECIMAL_PLACES,
         metrics_filename: str = "metrics.csv",
-        preferred_metric_key_order: list[str] | None = None,
-        excluded_metric_keys: set[str] | None = None,
+        metric_filter: MetricFilterConfig | None = None,
     ) -> None:
         super().__init__(log_dir=log_dir)
+        self._fs.makedirs(self.log_dir, exist_ok=True)
         self.decimal_places = int(decimal_places)
         self.metrics_filename = str(metrics_filename)
         self.metrics_file_path = os.path.join(self.log_dir, self.metrics_filename)
-        self.excluded_metric_keys = set(excluded_metric_keys or set())
+        self.metric_filter = metric_filter or MetricFilterConfig()
         self.preferred_metric_key_order = (
-            list(preferred_metric_key_order)
-            if preferred_metric_key_order is not None
+            list(self.metric_filter.preferred_metric_key_order)
+            if self.metric_filter.preferred_metric_key_order is not None
             else list(PREFERRED_METRIC_KEY_ORDER)
         )
 
@@ -113,10 +204,10 @@ class RoundedMetricsExperimentWriter(ExperimentWriter):
         if step is None:
             step = len(self.metrics)
 
+        filtered_metrics = self.metric_filter.filter(metrics_dict)
         metrics = {
             key: self._format_metric_value(key, value)
-            for key, value in metrics_dict.items()
-            if key not in self.excluded_metric_keys
+            for key, value in filtered_metrics.items()
         }
         if not metrics:
             return
@@ -134,6 +225,10 @@ class RoundedMetricsExperimentWriter(ExperimentWriter):
         self.metrics_keys = preferred_present + remaining
         return new_keys
 
+    def save(self) -> None:
+        self._fs.makedirs(self.log_dir, exist_ok=True)
+        super().save()
+
 
 class RoundedCSVLogger(CSVLogger):
     """CSVLogger that writes floating-point metric values rounded to 8 decimal places."""
@@ -145,17 +240,42 @@ class RoundedCSVLogger(CSVLogger):
         metrics_filename: str = "metrics.csv",
         preferred_metric_key_order: list[str] | None = None,
         excluded_metric_keys: set[str] | None = None,
+        included_metric_keys: set[str] | None = None,
+        metric_filter: MetricFilterConfig | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.decimal_places = int(decimal_places)
         self.metrics_filename = str(metrics_filename)
-        self.preferred_metric_key_order = (
-            list(preferred_metric_key_order)
-            if preferred_metric_key_order is not None
-            else None
+        self.metric_filter = metric_filter or MetricFilterConfig(
+            preferred_metric_key_order=(
+                list(preferred_metric_key_order)
+                if preferred_metric_key_order is not None
+                else None
+            ),
+            excluded_metric_keys=set(excluded_metric_keys or set()),
+            included_metric_keys=(
+                set(included_metric_keys)
+                if included_metric_keys is not None
+                else None
+            ),
         )
-        self.excluded_metric_keys = set(excluded_metric_keys or set())
+
+    @property
+    def preferred_metric_key_order(self) -> list[str] | None:
+        if self.metric_filter.preferred_metric_key_order is None:
+            return None
+        return list(self.metric_filter.preferred_metric_key_order)
+
+    @property
+    def excluded_metric_keys(self) -> set[str]:
+        return set(self.metric_filter.excluded_metric_keys or set())
+
+    @property
+    def included_metric_keys(self) -> set[str] | None:
+        if self.metric_filter.included_metric_keys is None:
+            return None
+        return set(self.metric_filter.included_metric_keys)
 
     @property
     @rank_zero_experiment
@@ -163,7 +283,7 @@ class RoundedCSVLogger(CSVLogger):
         if self._experiment is not None:
             return self._experiment
 
-        self._fs.makedirs(self.root_dir, exist_ok=True)
+        self._fs.makedirs(self.log_dir, exist_ok=True)
         metrics_path = os.path.join(self.log_dir, self.metrics_filename)
         if os.path.exists(metrics_path):
             os.remove(metrics_path)
@@ -171,7 +291,6 @@ class RoundedCSVLogger(CSVLogger):
             log_dir=self.log_dir,
             decimal_places=self.decimal_places,
             metrics_filename=self.metrics_filename,
-            preferred_metric_key_order=self.preferred_metric_key_order,
-            excluded_metric_keys=self.excluded_metric_keys,
+            metric_filter=self.metric_filter,
         )
         return self._experiment

@@ -55,6 +55,11 @@ if __package__ is None or __package__ == "":
     )
     from portfolio_attention.lightning.logging import (
         CSV_METRIC_DECIMAL_PLACES,
+        GRPO_INCLUDED_METRIC_KEYS,
+        GRPO_PREFERRED_METRIC_KEY_ORDER,
+        MetricFilterConfig,
+        MetricFilteringLogger,
+        RL_INCLUDED_METRIC_KEYS,
         RL_PREFERRED_METRIC_KEY_ORDER,
         RoundedCSVLogger,
         RoundedMetricsExperimentWriter,
@@ -99,6 +104,11 @@ else:
     )
     from .logging import (
         CSV_METRIC_DECIMAL_PLACES,
+        GRPO_INCLUDED_METRIC_KEYS,
+        GRPO_PREFERRED_METRIC_KEY_ORDER,
+        MetricFilterConfig,
+        MetricFilteringLogger,
+        RL_INCLUDED_METRIC_KEYS,
         RL_PREFERRED_METRIC_KEY_ORDER,
         RoundedCSVLogger,
         RoundedMetricsExperimentWriter,
@@ -216,11 +226,41 @@ def _resolve_lightning_strategy(train_config: TrainConfig, resolved_gpu_ids: lis
 
     rl_config = train_config.rl_training
     algorithm = str(getattr(rl_config, "algorithm", "")).strip().lower()
-    rollout_ppo_algorithms = {"single_epoch_rollout_ppo", "multi_epoch_rollout_ppo"}
-    if bool(getattr(rl_config, "enabled", False)) and algorithm in rollout_ppo_algorithms:
+    if bool(getattr(rl_config, "enabled", False)) and algorithm == "rollout_ppo":
         return "ddp"
 
     return "ddp_find_unused_parameters_true"
+
+
+def _resolve_trainer_gradient_clip_val(train_config: TrainConfig) -> float | None:
+    rl_config = train_config.rl_training
+    algorithm = str(getattr(rl_config, "algorithm", "")).strip().lower()
+    if (
+        bool(getattr(rl_config, "enabled", False))
+        and algorithm == "rollout_ppo"
+        and int(getattr(rl_config, "ppo_num_epochs", 1)) > 1
+    ):
+        return None
+    return float(train_config.grad_clip_norm)
+
+
+def _resolve_rl_metric_filter(train_config: TrainConfig) -> MetricFilterConfig:
+    rl_config = train_config.rl_training
+    if not bool(getattr(rl_config, "enabled", False)):
+        return MetricFilterConfig()
+    algorithm = str(getattr(rl_config, "algorithm", "")).strip().lower()
+    if algorithm == "rollout_ppo":
+        return MetricFilterConfig(
+            preferred_metric_key_order=list(RL_PREFERRED_METRIC_KEY_ORDER),
+            excluded_metric_keys={"val_loss_window"},
+            included_metric_keys=set(RL_INCLUDED_METRIC_KEYS),
+        )
+    if algorithm == "grpo_like":
+        return MetricFilterConfig(
+            preferred_metric_key_order=list(GRPO_PREFERRED_METRIC_KEY_ORDER),
+            included_metric_keys=set(GRPO_INCLUDED_METRIC_KEYS),
+        )
+    return MetricFilterConfig()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -423,18 +463,16 @@ def _build_single_state_training_stack(
         train_config=train_config,
     )
     callbacks = [checkpoint_callback, early_stopping_callback, config_epoch_checkpoint_callback]
-    if bool(train_config.enable_lr_warmup_decay):
-        callbacks.append(LearningRateMonitor(logging_interval="epoch"))
     rl_enabled = bool(train_config.rl_training.enabled)
+    if bool(train_config.enable_lr_warmup_decay) and not rl_enabled:
+        callbacks.append(LearningRateMonitor(logging_interval="epoch"))
+    metric_filter = _resolve_rl_metric_filter(train_config)
     csv_logger = RoundedCSVLogger(
         save_dir=str(paths.outputs_dir),
         name="lightning_logs",
         version=f"{data_config.state}_{train_config.loss_name}",
         metrics_filename=("RL_metrics.csv" if rl_enabled else "metrics.csv"),
-        preferred_metric_key_order=(
-            RL_PREFERRED_METRIC_KEY_ORDER if rl_enabled else None
-        ),
-        excluded_metric_keys={"val_loss_window"} if rl_enabled else None,
+        metric_filter=metric_filter,
     )
     trainer_logger = csv_logger
     if rl_enabled:
@@ -446,7 +484,13 @@ def _build_single_state_training_stack(
             log_model=False,
         )
         wandb_logger.experiment.define_metric("*", step_metric="epoch")
-        trainer_logger = [csv_logger, wandb_logger]
+        trainer_logger = [
+            csv_logger,
+            MetricFilteringLogger(
+                wandb_logger,
+                metric_filter=metric_filter,
+            ),
+        ]
 
     trainer = pl.Trainer(
         accelerator="gpu",
@@ -454,7 +498,7 @@ def _build_single_state_training_stack(
         num_nodes=1,
         strategy=_resolve_lightning_strategy(train_config, resolved_gpu_ids),
         max_epochs=int(train_config.num_epochs),
-        gradient_clip_val=float(train_config.grad_clip_norm),
+        gradient_clip_val=_resolve_trainer_gradient_clip_val(train_config),
         callbacks=callbacks,
         logger=trainer_logger,
         default_root_dir=str(paths.outputs_dir),

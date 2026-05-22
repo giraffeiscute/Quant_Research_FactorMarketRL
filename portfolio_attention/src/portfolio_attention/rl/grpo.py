@@ -18,7 +18,7 @@ from ..model.reward import (
     compute_return_reward,
     compute_rolling_sharpe_reward,
 )
-from ..training import rl_algorithms
+from . import algorithms as rl_algorithms
 
 
 @dataclass(frozen=True)
@@ -151,6 +151,8 @@ def run_grpo_like_policy_step_from_scored_tensors(
         "raw_allocation_max": raw_allocation.detach().max(),
     }
     metrics = {
+        "train_loss": policy_loss,
+        "train_weight_loss": policy_loss.detach().new_zeros(()),
         "train_policy_loss": policy_loss,
         "train_entropy_loss": entropy_loss.detach(),
         "train_entropy_per_dim": entropy_per_dim.detach().mean(),
