@@ -466,7 +466,7 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             f"received {config.enabled!r}."
         )
     config.algorithm = str(config.algorithm).strip().lower()  # type: ignore[assignment]
-    valid_algorithms = {"grpo_like", "single_epoch_rollout_ppo"}
+    valid_algorithms = {"grpo_like", "single_epoch_rollout_ppo", "multi_epoch_rollout_ppo"}
     if config.algorithm not in valid_algorithms:
         raise ValueError(
             "TrainConfig.rl_training.algorithm must be one of "
@@ -482,9 +482,10 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             f"{sorted(valid_reward_types)}, "
             f"received {config.reward_type!r}."
         )
-    if config.algorithm == "single_epoch_rollout_ppo" and config.reward_type != "return":
+    rollout_ppo_algorithms = {"single_epoch_rollout_ppo", "multi_epoch_rollout_ppo"}
+    if config.algorithm in rollout_ppo_algorithms and config.reward_type != "return":
         raise ValueError(
-            "single_epoch_rollout_ppo currently requires reward_type='return'. "
+            f"{config.algorithm} currently requires reward_type='return'. "
             f"Received {config.reward_type!r}."
         )
 
@@ -550,6 +551,12 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             "TrainConfig.rl_training.ppo_num_epochs must be 1 for "
             "single_epoch_rollout_ppo; this algorithm does not support "
             "multi-epoch PPO updates yet. "
+            f"Received {config.ppo_num_epochs}."
+        )
+    if config.algorithm == "multi_epoch_rollout_ppo" and config.ppo_num_epochs <= 0:
+        raise ValueError(
+            "TrainConfig.rl_training.ppo_num_epochs must be positive for "
+            "multi_epoch_rollout_ppo. "
             f"Received {config.ppo_num_epochs}."
         )
 

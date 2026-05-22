@@ -216,7 +216,8 @@ def _resolve_lightning_strategy(train_config: TrainConfig, resolved_gpu_ids: lis
 
     rl_config = train_config.rl_training
     algorithm = str(getattr(rl_config, "algorithm", "")).strip().lower()
-    if bool(getattr(rl_config, "enabled", False)) and algorithm == "single_epoch_rollout_ppo":
+    rollout_ppo_algorithms = {"single_epoch_rollout_ppo", "multi_epoch_rollout_ppo"}
+    if bool(getattr(rl_config, "enabled", False)) and algorithm in rollout_ppo_algorithms:
         return "ddp"
 
     return "ddp_find_unused_parameters_true"
