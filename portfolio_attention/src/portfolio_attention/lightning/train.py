@@ -55,7 +55,6 @@ if __package__ is None or __package__ == "":
     )
     from portfolio_attention.lightning.logging import (
         CSV_METRIC_DECIMAL_PLACES,
-        GRPO_INCLUDED_METRIC_KEYS,
         GRPO_PREFERRED_METRIC_KEY_ORDER,
         MetricFilterConfig,
         MetricFilteringLogger,
@@ -104,7 +103,6 @@ else:
     )
     from .logging import (
         CSV_METRIC_DECIMAL_PLACES,
-        GRPO_INCLUDED_METRIC_KEYS,
         GRPO_PREFERRED_METRIC_KEY_ORDER,
         MetricFilterConfig,
         MetricFilteringLogger,
@@ -258,7 +256,7 @@ def _resolve_rl_metric_filter(train_config: TrainConfig) -> MetricFilterConfig:
     if algorithm == "grpo_like":
         return MetricFilterConfig(
             preferred_metric_key_order=list(GRPO_PREFERRED_METRIC_KEY_ORDER),
-            included_metric_keys=set(GRPO_INCLUDED_METRIC_KEYS),
+            excluded_metric_keys={"val_loss_window", "lr"},
         )
     return MetricFilterConfig()
 

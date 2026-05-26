@@ -159,6 +159,7 @@ def build_rollout_ppo_update_metrics(
     entropy_per_dim = policy_scoring.entropy / float(policy_scoring.alpha.shape[-1])
     rollout_final_returns = torch.prod(1.0 + ppo_batch.sampled_net_returns, dim=1) - 1.0
     return {
+        "train_total_loss": ppo_update.policy_loss.detach(),
         "train_policy_loss": ppo_update.ppo_policy_loss,
         "train_entropy_loss": ppo_update.entropy_loss.detach(),
         "train_entropy_per_dim": entropy_per_dim.detach().mean(),

@@ -167,7 +167,7 @@ class PortfolioLightningModule(pl.LightningModule):
             self._log_train_epoch_metric(
                 metric_name,
                 metric_value,
-                prog_bar=(metric_name == "train_policy_loss"),
+                prog_bar=(metric_name == "train_total_loss"),
                 batch_size=result.batch_size,
             )
         self._log_current_learning_rate(batch_size=result.batch_size)
@@ -224,7 +224,7 @@ class PortfolioLightningModule(pl.LightningModule):
                 self._log_train_epoch_metric(
                     metric_name,
                     metric_value,
-                    prog_bar=(metric_name == "train_policy_loss"),
+                    prog_bar=(metric_name == "train_total_loss"),
                     batch_size=collected.batch_size,
                 )
             self._log_current_learning_rate(batch_size=collected.batch_size)
