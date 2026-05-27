@@ -49,7 +49,7 @@ def sample_rollout_path(
     This is simulator-only rollout collection for future rolling PPO. It does
     not compute PPO losses, discounted returns, advantages, GAE, or a rollout
     buffer. Rewards are currently per-step portfolio returns scaled by
-    ``rl_training.reward_scale`` and clipped by ``rl_training.reward_clip``.
+    ``rl_training.reward_scale`` and clipped by ``rl_training.ppo.reward_clip``.
     """
     _validate_rollout_inputs(
         scored_logits,
@@ -138,7 +138,7 @@ def _validate_rollout_reward_config(train_config: TrainConfig) -> tuple[float, f
     reward_scale = float(train_config.rl_training.reward_scale)
     if reward_scale <= 0.0:
         raise ValueError(f"reward_scale must be > 0, received {reward_scale}.")
-    reward_clip = float(train_config.rl_training.reward_clip)
+    reward_clip = float(train_config.rl_training.ppo.reward_clip)
     if reward_clip <= 0.0:
         raise ValueError(f"reward_clip must be > 0, received {reward_clip}.")
     return reward_scale, reward_clip

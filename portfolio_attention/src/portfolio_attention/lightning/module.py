@@ -17,17 +17,25 @@ from ..config.validation import (
 )
 from ..data.dataset import PortfolioPanelDataset
 from ..evaluation.metrics import compute_portfolio_sr
+from ..model import TwinPortfolioQCritic, clone_target_q_critic
+from ..rl.replay import SACReplayBuffer
+from ..rl.sac import (
+    compute_sac_actor_alpha_loss_from_replay_batch,
+    compute_sac_q_loss_from_replay_batch,
+    soft_update_targets,
+)
 from ..training.engine import _run_loss_step, build_training_model
 from ..training.lr_scheduler import (
     build_lr_warmup_decay_scheduler,
     resolve_total_optimizer_steps,
 )
 from ..rl.ppo import build_rollout_ppo_update_metrics
-from ..training.rl_engine import (
+from ..training.ppo_engine import (
     collect_rollout_ppo_training_batch,
-    run_rl_policy_step,
     run_rollout_ppo_update,
 )
+from ..training.rl_engine import run_rl_policy_step
+from ..training.sac_engine import collect_sac_training_batch
 from .gradient_diagnostics import (
     GradientDiagnosticsCSVWriter,
     compute_gradient_diagnostics,
@@ -70,7 +78,7 @@ class PortfolioLightningModule(pl.LightningModule):
             else None
         )
         self._latest_train_diagnostics: dict[str, Any] = {}
-        self.automatic_optimization = not self._uses_manual_rollout_ppo()
+        self.automatic_optimization = not self._uses_manual_rl_optimization()
 
         self.model = build_training_model(
             model_config=model_config,
@@ -78,6 +86,28 @@ class PortfolioLightningModule(pl.LightningModule):
             data_config=data_config,
             device=torch.device("cpu"),
         )
+        self.sac_q_critic: TwinPortfolioQCritic | None = None
+        self.sac_target_q_critic: TwinPortfolioQCritic | None = None
+        self.sac_replay_buffer: SACReplayBuffer | None = None
+        self.sac_log_alpha: torch.nn.Parameter | None = None
+        self._sac_update_count = 0
+        if self._uses_sac():
+            sac_action_dim = self._resolve_sac_action_dim()
+            self.sac_q_critic = TwinPortfolioQCritic(
+                stock_temporal_dim=int(model_config.stock_temporal_dim),
+                market_temporal_dim=int(model_config.market_temporal_dim),
+                action_dim=sac_action_dim,
+                hidden_dim=int(model_config.cross_sectional_dim),
+            )
+            self.sac_target_q_critic = clone_target_q_critic(self.sac_q_critic)
+            self.sac_replay_buffer = SACReplayBuffer(
+                capacity=int(self.train_config.rl_training.sac.buffer_size)
+            )
+            if bool(self.train_config.rl_training.sac.auto_entropy):
+                temp_init = float(self.train_config.rl_training.sac.temp_init)
+                self.sac_log_alpha = torch.nn.Parameter(
+                    torch.log(torch.tensor(temp_init, dtype=torch.float32))
+                )
         self.val_metric = ScenarioRollingValidationMetric()
 
     def forward(
@@ -147,6 +177,8 @@ class PortfolioLightningModule(pl.LightningModule):
         return loss
 
     def _training_step_rl(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
+        if self._uses_sac():
+            return self._training_step_sac(batch, batch_idx)
         if self._uses_manual_rollout_ppo():
             return self._training_step_rollout_ppo(batch, batch_idx)
 
@@ -173,6 +205,137 @@ class PortfolioLightningModule(pl.LightningModule):
         self._log_current_learning_rate(batch_size=result.batch_size)
         return result.policy_loss
 
+    def _training_step_sac(
+        self,
+        batch: dict[str, Any],
+        batch_idx: int,
+    ) -> torch.Tensor:
+        actor_optimizer, critic_optimizer, alpha_optimizer = self._sac_optimizers()
+        sac_config = self.train_config.rl_training.sac
+        collected = collect_sac_training_batch(
+            self.model,
+            batch,
+            model_config=self.model_config,
+            train_config=self.train_config,
+        )
+        replay_buffer = self._require_sac_replay_buffer()
+        replay_buffer.push(collected.transitions)
+        replay_size = len(replay_buffer)
+        batch_size = int(collected.batch_size)
+        self._latest_train_diagnostics = self._build_train_diagnostics(
+            loss=collected.dummy_loss,
+            summary=collected.summary,
+            batch_idx=batch_idx,
+        )
+
+        base_metrics: dict[str, torch.Tensor | float] = {
+            "train_sac_replay_size": float(replay_size),
+            "train_sac_collected_transitions": float(batch_size),
+            "train_sac_context_window_steps": float(collected.context_window_steps),
+            "train_sac_update_count": float(self._sac_update_count),
+            "train_sac_temp": self._current_sac_temp_tensor(),
+            "train_sac_sampled_reward_mean": collected.summary[
+                "sampled_action_reward_mean"
+            ],
+            "train_sac_sampled_return": collected.summary[
+                "scenario_final_returns"
+            ].mean(),
+            "train_sac_sampled_turnover": collected.summary["mean_turnover"],
+        }
+        if replay_size < int(sac_config.warmup_steps):
+            for metric_name, metric_value in base_metrics.items():
+                self._log_train_epoch_metric(
+                    metric_name,
+                    metric_value,
+                    prog_bar=False,
+                    batch_size=batch_size,
+            )
+            self._log_current_learning_rate(batch_size=batch_size)
+            return collected.dummy_loss.detach()
+
+        q_losses: list[torch.Tensor] = []
+        actor_losses: list[torch.Tensor] = []
+        alpha_losses: list[torch.Tensor] = []
+        target_q_means: list[torch.Tensor] = []
+        log_prob_means: list[torch.Tensor] = []
+        updates_per_batch = max(1, int(sac_config.updates_per_batch))
+        for _ in range(updates_per_batch):
+            replay_batch = replay_buffer.sample(
+                int(sac_config.batch_size),
+                device=self.device,
+            )
+
+            critic_optimizer.zero_grad()
+            q_result = compute_sac_q_loss_from_replay_batch(
+                actor_model=self.model,
+                q_critic=self._require_sac_q_critic(),
+                target_q_critic=self._require_sac_target_q_critic(),
+                replay_batch=replay_batch,
+                model_config=self.model_config,
+                train_config=self.train_config,
+                alpha=self._fixed_sac_alpha_or_none(),
+                log_alpha=self.sac_log_alpha,
+            )
+            self.manual_backward(q_result.q_loss)
+            self._clip_manual_optimizer_gradients(critic_optimizer)
+            critic_optimizer.step()
+            critic_optimizer.zero_grad()
+
+            actor_optimizer.zero_grad()
+            actor_result = compute_sac_actor_alpha_loss_from_replay_batch(
+                actor_model=self.model,
+                q_critic=self._require_sac_q_critic(),
+                replay_batch=replay_batch,
+                model_config=self.model_config,
+                train_config=self.train_config,
+                alpha=self._fixed_sac_alpha_or_none(),
+                log_alpha=self.sac_log_alpha,
+                target_entropy=sac_config.target_entropy,
+            )
+            self.manual_backward(actor_result.actor_loss)
+            self._clip_manual_optimizer_gradients(actor_optimizer)
+            actor_optimizer.step()
+            actor_optimizer.zero_grad()
+
+            if alpha_optimizer is not None and actor_result.alpha_loss is not None:
+                alpha_optimizer.zero_grad()
+                self.manual_backward(actor_result.alpha_loss)
+                alpha_optimizer.step()
+                alpha_optimizer.zero_grad()
+                alpha_losses.append(actor_result.alpha_loss.detach())
+
+            soft_update_targets(
+                self._require_sac_q_critic(),
+                self._require_sac_target_q_critic(),
+                tau=float(sac_config.tau),
+            )
+            self._sac_update_count += 1
+            q_losses.append(q_result.q_loss.detach())
+            actor_losses.append(actor_result.actor_loss.detach())
+            target_q_means.append(q_result.target_q.detach().mean())
+            log_prob_means.append(actor_result.policy_log_prob.detach().mean())
+
+        metrics = {
+            **base_metrics,
+            "train_sac_q_loss": torch.stack(q_losses).mean(),
+            "train_sac_actor_loss": torch.stack(actor_losses).mean(),
+            "train_sac_target_q_mean": torch.stack(target_q_means).mean(),
+            "train_sac_log_prob_mean": torch.stack(log_prob_means).mean(),
+            "train_sac_update_count": float(self._sac_update_count),
+        }
+        if alpha_losses:
+            metrics["train_sac_temp_loss"] = torch.stack(alpha_losses).mean()
+        metrics["train_sac_temp"] = self._current_sac_temp_tensor()
+        for metric_name, metric_value in metrics.items():
+            self._log_train_epoch_metric(
+                metric_name,
+                metric_value,
+                prog_bar=metric_name in {"train_sac_q_loss", "train_sac_actor_loss"},
+                batch_size=batch_size,
+            )
+        self._log_current_learning_rate(batch_size=batch_size)
+        return metrics["train_sac_actor_loss"].detach()
+
     def _training_step_rollout_ppo(
         self,
         batch: dict[str, Any],
@@ -189,7 +352,7 @@ class PortfolioLightningModule(pl.LightningModule):
             train_config=self.train_config,
         )
         last_loss: torch.Tensor | None = None
-        ppo_num_epochs = int(self.train_config.rl_training.ppo_num_epochs)
+        ppo_num_epochs = int(self.train_config.rl_training.ppo.num_epochs)
         for ppo_epoch in range(1, ppo_num_epochs + 1):
             ppo_update = run_rollout_ppo_update(
                 self.model,
@@ -447,6 +610,27 @@ class PortfolioLightningModule(pl.LightningModule):
         return str(value)
 
     def configure_optimizers(self) -> Any:
+        if self._uses_sac():
+            optimizers: list[torch.optim.Optimizer] = [
+                torch.optim.Adam(
+                    self.model.parameters(),
+                    lr=float(self.train_config.learning_rate),
+                    weight_decay=float(self.train_config.weight_decay),
+                ),
+                torch.optim.Adam(
+                    self._require_sac_q_critic().parameters(),
+                    lr=float(self.train_config.learning_rate),
+                    weight_decay=float(self.train_config.weight_decay),
+                ),
+            ]
+            if self.sac_log_alpha is not None:
+                optimizers.append(
+                    torch.optim.Adam(
+                        [self.sac_log_alpha],
+                        lr=float(self.train_config.rl_training.sac.temp_lr),
+                    )
+                )
+            return optimizers
         optimizer = torch.optim.Adam(
             self.model.parameters(),
             lr=float(self.train_config.learning_rate),
@@ -496,13 +680,79 @@ class PortfolioLightningModule(pl.LightningModule):
         return (
             bool(getattr(rl_config, "enabled", False))
             and algorithm == "rollout_ppo"
-            and int(getattr(rl_config, "ppo_num_epochs", 1)) > 1
+            and int(rl_config.ppo.num_epochs) > 1
         )
 
+    def _uses_sac(self) -> bool:
+        rl_config = self.train_config.rl_training
+        algorithm = str(getattr(rl_config, "algorithm", "")).strip().lower()
+        return bool(getattr(rl_config, "enabled", False)) and algorithm == "sac"
+
+    def _uses_manual_rl_optimization(self) -> bool:
+        return self._uses_sac() or self._uses_manual_rollout_ppo()
+
     def _optimizer_steps_per_training_batch(self) -> int:
+        if self._uses_sac():
+            return max(1, int(self.train_config.rl_training.sac.updates_per_batch))
         if self._uses_manual_rollout_ppo():
-            return max(1, int(self.train_config.rl_training.ppo_num_epochs))
+            return max(1, int(self.train_config.rl_training.ppo.num_epochs))
         return 1
 
     def _validate_rollout_ppo_model_config(self) -> None:
         validate_train_config_against_model_config(self.train_config, self.model_config)
+
+    def _sac_optimizers(
+        self,
+    ) -> tuple[torch.optim.Optimizer, torch.optim.Optimizer, torch.optim.Optimizer | None]:
+        optimizers = self.optimizers()
+        if not isinstance(optimizers, (list, tuple)):
+            optimizers = [optimizers]
+        expected_count = 3 if self.sac_log_alpha is not None else 2
+        if len(optimizers) != expected_count:
+            raise RuntimeError(
+                f"SAC expected {expected_count} optimizers, received {len(optimizers)}."
+            )
+        alpha_optimizer = optimizers[2] if expected_count == 3 else None
+        return optimizers[0], optimizers[1], alpha_optimizer
+
+    def _clip_manual_optimizer_gradients(self, optimizer: torch.optim.Optimizer) -> None:
+        if float(self.train_config.grad_clip_norm) <= 0.0:
+            return
+        self.clip_gradients(
+            optimizer,
+            gradient_clip_val=float(self.train_config.grad_clip_norm),
+            gradient_clip_algorithm="norm",
+        )
+
+    def _resolve_sac_action_dim(self) -> int:
+        dataset_num_stocks = int(getattr(self.dataset, "num_stocks", 0) or 0)
+        sample_num_stocks = int(getattr(self.data_config, "sample_num_stocks", dataset_num_stocks))
+        if dataset_num_stocks <= 0:
+            return sample_num_stocks + 1
+        return min(sample_num_stocks, dataset_num_stocks) + 1
+
+    def _fixed_sac_alpha_or_none(self) -> float | None:
+        if self.sac_log_alpha is not None:
+            return None
+        return float(self.train_config.rl_training.sac.temp_init)
+
+    def _current_sac_temp_tensor(self) -> torch.Tensor:
+        if self.sac_log_alpha is not None:
+            return self.sac_log_alpha.detach().exp()
+        reference = next(self.model.parameters())
+        return reference.detach().new_tensor(float(self.train_config.rl_training.sac.temp_init))
+
+    def _require_sac_replay_buffer(self) -> SACReplayBuffer:
+        if self.sac_replay_buffer is None:
+            raise RuntimeError("SAC replay buffer is not initialized.")
+        return self.sac_replay_buffer
+
+    def _require_sac_q_critic(self) -> TwinPortfolioQCritic:
+        if self.sac_q_critic is None:
+            raise RuntimeError("SAC Q critic is not initialized.")
+        return self.sac_q_critic
+
+    def _require_sac_target_q_critic(self) -> TwinPortfolioQCritic:
+        if self.sac_target_q_critic is None:
+            raise RuntimeError("SAC target Q critic is not initialized.")
+        return self.sac_target_q_critic

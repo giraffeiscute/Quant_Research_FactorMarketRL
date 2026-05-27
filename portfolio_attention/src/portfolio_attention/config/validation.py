@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .paths import default_scenario_dir
-from .schema import RLTrainingConfig
+from .schema import GRPOTrainingConfig, PPOTrainingConfig, RLTrainingConfig, SACTrainingConfig
 
 if TYPE_CHECKING:
     from .schema import DataConfig, EvaluationConfig, ModelConfig, TrainConfig
@@ -457,19 +457,92 @@ def validate_train_config(config: TrainConfig) -> None:
             )
 
     config.rl_training = _validated_rl_training_config(config.rl_training)
+    if (
+        bool(config.enable_lr_warmup_decay)
+        and bool(config.rl_training.enabled)
+        and str(config.rl_training.algorithm).strip().lower() == "sac"
+    ):
+        raise ValueError(
+            "SAC training currently does not support TrainConfig.enable_lr_warmup_decay=True; "
+            "disable the scheduler or add explicit SAC manual scheduler stepping."
+        )
+
+
+def _validate_nested_rl_config_keys(
+    value: dict[object, object],
+    key: str,
+    config_type: type[GRPOTrainingConfig] | type[PPOTrainingConfig] | type[SACTrainingConfig],
+) -> None:
+    nested_value = value.get(key)
+    if nested_value is None or isinstance(nested_value, config_type):
+        return
+    if not isinstance(nested_value, dict):
+        raise ValueError(
+            f"TrainConfig.rl_training.{key} must be a {config_type.__name__} or mapping, "
+            f"received {type(nested_value).__name__}."
+        )
+    legal_keys = {field_info.name for field_info in fields(config_type)}
+    if config_type is SACTrainingConfig:
+        legal_keys |= {"alpha_init", "alpha_lr"}
+    unknown_keys = sorted(str(nested_key) for nested_key in nested_value if nested_key not in legal_keys)
+    if unknown_keys:
+        raise ValueError(
+            f"TrainConfig.rl_training.{key} contains unknown keys {unknown_keys}. "
+            f"Legal keys: {sorted(legal_keys)}."
+        )
 
 
 def _validated_rl_training_config(value: object) -> RLTrainingConfig:
     if isinstance(value, RLTrainingConfig):
-        config = replace(value)
+        config = RLTrainingConfig(
+            enabled=value.enabled,
+            algorithm=value.algorithm,
+            reward_type=value.reward_type,
+            reward_scale=value.reward_scale,
+            alpha_min=value.alpha_min,
+            alpha_max=value.alpha_max,
+            rl_post_train_evidence_scale=value.rl_post_train_evidence_scale,
+            grpo=value.grpo,
+            ppo=value.ppo,
+            sac=value.sac,
+        )
     elif isinstance(value, dict):
-        legal_keys = {field_info.name for field_info in fields(RLTrainingConfig)}
+        legacy_keys = {
+            "group_size",
+            "warmup_allocation_mode",
+            "dsr_var_eps",
+            "reward_clip",
+            "entropy_coef",
+            "ppo_clip_range",
+            "value_loss_coef",
+            "ppo_num_epochs",
+            "ppo_gamma",
+            "normalize_rollout_advantages",
+            "sac_gamma",
+            "sac_tau",
+            "sac_buffer_size",
+            "sac_batch_size",
+            "sac_updates_per_batch",
+            "sac_warmup_steps",
+            "sac_context_window_steps",
+            "sac_target_entropy",
+            "sac_temp_init",
+            "sac_temp_lr",
+            "sac_alpha_init",
+            "sac_alpha_lr",
+            "sac_auto_entropy",
+            "sac_reward_clip",
+        }
+        legal_keys = {field_info.name for field_info in fields(RLTrainingConfig)} | legacy_keys
         unknown_keys = sorted(str(key) for key in value.keys() if key not in legal_keys)
         if unknown_keys:
             raise ValueError(
                 "TrainConfig.rl_training contains unknown keys "
                 f"{unknown_keys}. Legal keys: {sorted(legal_keys)}."
             )
+        _validate_nested_rl_config_keys(value, "grpo", GRPOTrainingConfig)
+        _validate_nested_rl_config_keys(value, "ppo", PPOTrainingConfig)
+        _validate_nested_rl_config_keys(value, "sac", SACTrainingConfig)
         config = RLTrainingConfig(**value)
     else:
         raise ValueError(
@@ -486,6 +559,7 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
     valid_algorithms = {
         "grpo_like",
         "rollout_ppo",
+        "sac",
     }
     if config.algorithm not in valid_algorithms:
         raise ValueError(
@@ -507,25 +581,25 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             f"Received {config.reward_type!r}."
         )
 
-    config.warmup_allocation_mode = str(config.warmup_allocation_mode).strip().lower()  # type: ignore[assignment]
-    if config.warmup_allocation_mode != "deterministic_mean":
+    config.grpo.warmup_allocation_mode = str(config.grpo.warmup_allocation_mode).strip().lower()  # type: ignore[assignment]
+    if config.grpo.warmup_allocation_mode != "deterministic_mean":
         raise ValueError(
             "TrainConfig.rl_training.warmup_allocation_mode must be 'deterministic_mean', "
-            f"received {config.warmup_allocation_mode!r}."
+            f"received {config.grpo.warmup_allocation_mode!r}."
         )
 
-    config.group_size = int(config.group_size)
-    if config.group_size <= 0:
+    config.grpo.group_size = int(config.grpo.group_size)
+    if config.grpo.group_size <= 0:
         raise ValueError(
             "TrainConfig.rl_training.group_size must be positive, "
-            f"received {config.group_size}."
+            f"received {config.grpo.group_size}."
         )
 
-    config.dsr_var_eps = float(config.dsr_var_eps)
-    if config.dsr_var_eps <= 0.0:
+    config.grpo.dsr_var_eps = float(config.grpo.dsr_var_eps)
+    if config.grpo.dsr_var_eps <= 0.0:
         raise ValueError(
             "TrainConfig.rl_training.dsr_var_eps must be > 0, "
-            f"received {config.dsr_var_eps}."
+            f"received {config.grpo.dsr_var_eps}."
         )
 
     config.reward_scale = float(config.reward_scale)
@@ -535,53 +609,143 @@ def _validated_rl_training_config(value: object) -> RLTrainingConfig:
             f"received {config.reward_scale}."
         )
 
-    config.reward_clip = float(config.reward_clip)
-    if config.reward_clip <= 0.0:
+    config.grpo.reward_clip = float(config.grpo.reward_clip)
+    if config.grpo.reward_clip <= 0.0:
         raise ValueError(
             "TrainConfig.rl_training.reward_clip must be > 0, "
-            f"received {config.reward_clip}."
+            f"received {config.grpo.reward_clip}."
+        )
+    config.ppo.reward_clip = float(config.ppo.reward_clip)
+    if config.ppo.reward_clip <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.ppo.reward_clip must be > 0, "
+            f"received {config.ppo.reward_clip}."
         )
 
-    config.entropy_coef = float(config.entropy_coef)
-    if config.entropy_coef < 0.0:
+    config.grpo.entropy_coef = float(config.grpo.entropy_coef)
+    if config.grpo.entropy_coef < 0.0:
         raise ValueError(
             "TrainConfig.rl_training.entropy_coef must be non-negative, "
-            f"received {config.entropy_coef}."
+            f"received {config.grpo.entropy_coef}."
+        )
+    config.ppo.entropy_coef = float(config.ppo.entropy_coef)
+    if config.ppo.entropy_coef < 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.ppo.entropy_coef must be non-negative, "
+            f"received {config.ppo.entropy_coef}."
         )
 
-    config.ppo_clip_range = float(config.ppo_clip_range)
-    if config.ppo_clip_range <= 0.0:
+    config.ppo.clip_range = float(config.ppo.clip_range)
+    if config.ppo.clip_range <= 0.0:
         raise ValueError(
             "TrainConfig.rl_training.ppo_clip_range must be > 0, "
-            f"received {config.ppo_clip_range}."
+            f"received {config.ppo.clip_range}."
         )
 
-    config.value_loss_coef = float(config.value_loss_coef)
-    if config.value_loss_coef < 0.0:
+    config.ppo.value_loss_coef = float(config.ppo.value_loss_coef)
+    if config.ppo.value_loss_coef < 0.0:
         raise ValueError(
             "TrainConfig.rl_training.value_loss_coef must be non-negative, "
-            f"received {config.value_loss_coef}."
+            f"received {config.ppo.value_loss_coef}."
         )
 
-    config.ppo_num_epochs = int(config.ppo_num_epochs)
-    if config.ppo_num_epochs < 1:
+    config.ppo.num_epochs = int(config.ppo.num_epochs)
+    if config.ppo.num_epochs < 1:
         raise ValueError(
             "TrainConfig.rl_training.ppo_num_epochs must be >= 1. "
-            f"Received {config.ppo_num_epochs}."
+            f"Received {config.ppo.num_epochs}."
         )
 
-    config.ppo_gamma = float(config.ppo_gamma)
-    if config.ppo_gamma < 0.0 or config.ppo_gamma > 1.0:
+    config.ppo.gamma = float(config.ppo.gamma)
+    if config.ppo.gamma < 0.0 or config.ppo.gamma > 1.0:
         raise ValueError(
             "TrainConfig.rl_training.ppo_gamma must be in [0, 1], "
-            f"received {config.ppo_gamma}."
+            f"received {config.ppo.gamma}."
         )
 
-    if not isinstance(config.normalize_rollout_advantages, bool):
+    if not isinstance(config.ppo.normalize_advantages, bool):
         raise ValueError(
             "TrainConfig.rl_training.normalize_rollout_advantages must be a bool, "
-            f"received {config.normalize_rollout_advantages!r}."
+            f"received {config.ppo.normalize_advantages!r}."
         )
+
+    config.sac.gamma = float(config.sac.gamma)
+    if config.sac.gamma < 0.0 or config.sac.gamma > 1.0:
+        raise ValueError(
+            "TrainConfig.rl_training.sac_gamma must be in [0, 1], "
+            f"received {config.sac.gamma}."
+        )
+
+    config.sac.tau = float(config.sac.tau)
+    if config.sac.tau <= 0.0 or config.sac.tau > 1.0:
+        raise ValueError(
+            "TrainConfig.rl_training.sac_tau must be in (0, 1], "
+            f"received {config.sac.tau}."
+        )
+
+    config.sac.buffer_size = int(config.sac.buffer_size)
+    if config.sac.buffer_size <= 0:
+        raise ValueError(
+            "TrainConfig.rl_training.sac_buffer_size must be positive, "
+            f"received {config.sac.buffer_size}."
+        )
+
+    config.sac.batch_size = int(config.sac.batch_size)
+    if config.sac.batch_size <= 0:
+        raise ValueError(
+            "TrainConfig.rl_training.sac_batch_size must be positive, "
+            f"received {config.sac.batch_size}."
+        )
+
+    config.sac.updates_per_batch = int(config.sac.updates_per_batch)
+    if config.sac.updates_per_batch <= 0:
+        raise ValueError(
+            "TrainConfig.rl_training.sac_updates_per_batch must be positive, "
+            f"received {config.sac.updates_per_batch}."
+        )
+
+    config.sac.warmup_steps = int(config.sac.warmup_steps)
+    if config.sac.warmup_steps < 0:
+        raise ValueError(
+            "TrainConfig.rl_training.sac_warmup_steps must be non-negative, "
+            f"received {config.sac.warmup_steps}."
+        )
+
+    if config.sac.context_window_steps is not None:
+        config.sac.context_window_steps = int(config.sac.context_window_steps)
+        if config.sac.context_window_steps <= 0:
+            raise ValueError(
+                "TrainConfig.rl_training.sac_context_window_steps must be positive when set, "
+                f"received {config.sac.context_window_steps}."
+            )
+
+    if config.sac.target_entropy is not None:
+        config.sac.target_entropy = float(config.sac.target_entropy)
+
+    config.sac.temp_init = float(config.sac.temp_init)
+    if config.sac.temp_init <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.sac_temp_init must be > 0, "
+            f"received {config.sac.temp_init}."
+        )
+
+    config.sac.temp_lr = float(config.sac.temp_lr)
+    if config.sac.temp_lr <= 0.0:
+        raise ValueError(
+            "TrainConfig.rl_training.sac_temp_lr must be > 0, "
+            f"received {config.sac.temp_lr}."
+        )
+
+    if not isinstance(config.sac.auto_entropy, bool):
+        raise ValueError(
+            "TrainConfig.rl_training.sac_auto_entropy must be a bool, "
+            f"received {config.sac.auto_entropy!r}."
+        )
+
+    if config.sac.reward_clip is not None:
+        config.sac.reward_clip = float(config.sac.reward_clip)
+        if config.sac.reward_clip <= 0.0:
+            config.sac.reward_clip = None
 
     config.alpha_min = float(config.alpha_min)
     config.alpha_max = float(config.alpha_max)

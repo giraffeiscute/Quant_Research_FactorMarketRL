@@ -67,6 +67,7 @@ def collect_rollout_ppo_batch(
     model_config: ModelConfig,
     train_config: TrainConfig,
 ) -> RolloutPPOBatch:
+    ppo_config = train_config.rl_training.ppo
     rollout = sample_rollout_path(
         scored_logits=scored_logits,
         scored_r_stock=scored_r_stock,
@@ -77,12 +78,12 @@ def collect_rollout_ppo_batch(
     )
     targets = compute_discounted_reward_targets(
         rollout.sampled_rewards,
-        gamma=float(train_config.rl_training.ppo_gamma),
+        gamma=float(ppo_config.gamma),
     )
     advantages = compute_rollout_advantages_from_targets(
         targets,
         rollout.old_values,
-        normalize=bool(train_config.rl_training.normalize_rollout_advantages),
+        normalize=bool(ppo_config.normalize_advantages),
     )
     return RolloutPPOBatch(
         sampled_actions=rollout.sampled_actions.detach(),
@@ -108,6 +109,7 @@ def compute_rollout_ppo_update_loss(
     model_config: ModelConfig,
     train_config: TrainConfig,
 ) -> RolloutPPOUpdateResult:
+    ppo_config = train_config.rl_training.ppo
     policy_scoring = compute_dirichlet_log_probs_from_logits(
         scored_logits,
         ppo_batch.sampled_actions,
@@ -115,7 +117,7 @@ def compute_rollout_ppo_update_loss(
         train_config=train_config,
     )
     entropy_per_dim = policy_scoring.entropy / float(scored_logits.shape[-1])
-    entropy_loss = -float(train_config.rl_training.entropy_coef) * entropy_per_dim.mean()
+    entropy_loss = -float(ppo_config.entropy_coef) * entropy_per_dim.mean()
 
     # With a fresh model forward, the ratio can drift away from 1.0 while the
     # old log-probabilities, actions, and advantages remain fixed.
@@ -123,7 +125,7 @@ def compute_rollout_ppo_update_loss(
         policy_scoring.new_log_probs,
         ppo_batch.old_log_probs,
         ppo_batch.advantages,
-        clip_range=float(train_config.rl_training.ppo_clip_range),
+        clip_range=float(ppo_config.clip_range),
     )
     log_ratio = policy_scoring.new_log_probs - ppo_batch.old_log_probs
     approx_kl = ((torch.exp(log_ratio) - 1.0) - log_ratio).mean().detach()
@@ -133,7 +135,7 @@ def compute_rollout_ppo_update_loss(
     )
     policy_loss = (
         ppo_policy_loss
-        + float(train_config.rl_training.value_loss_coef) * value_loss
+        + float(ppo_config.value_loss_coef) * value_loss
         + entropy_loss
     )
     return RolloutPPOUpdateResult(

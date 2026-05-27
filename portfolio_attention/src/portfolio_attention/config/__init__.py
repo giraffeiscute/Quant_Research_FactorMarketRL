@@ -2,7 +2,17 @@
 
 from .paths import default_scenario_dir, project_root, repo_root
 from .loader import ExperimentConfig, load_experiment_config
-from .schema import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, RLTrainingConfig, TrainConfig
+from .schema import (
+    DataConfig,
+    EvaluationConfig,
+    GRPOTrainingConfig,
+    ModelConfig,
+    PPOTrainingConfig,
+    PathsConfig,
+    RLTrainingConfig,
+    SACTrainingConfig,
+    TrainConfig,
+)
 from .validation import (
     LEGACY_LOOKBACK_MODES,
     LOOKBACK_MODE_ROLLING_WINDOW,
@@ -25,9 +35,12 @@ __all__ = [
     "DataConfig",
     "EvaluationConfig",
     "ExperimentConfig",
+    "GRPOTrainingConfig",
     "ModelConfig",
+    "PPOTrainingConfig",
     "PathsConfig",
     "RLTrainingConfig",
+    "SACTrainingConfig",
     "TrainConfig",
     "default_scenario_dir",
     "load_experiment_config",

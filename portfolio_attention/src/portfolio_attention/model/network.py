@@ -308,6 +308,9 @@ class PortfolioAttentionModel(nn.Module):
         stock_indices: torch.Tensor,
         target_returns: torch.Tensor | None = None,
         compute_value_prediction: bool = False,
+        initial_allocation_override: torch.Tensor | None = None,
+        return_state_features: bool = False,
+        return_last_step_only: bool = False,
     ) -> dict[str, Any]:
         if x_stock.ndim != 4:
             raise ValueError("x_stock must have shape [S, T, N, F_stock].")
@@ -366,12 +369,31 @@ class PortfolioAttentionModel(nn.Module):
         market_current, market_summary, market_temporal_debug_info = (
             self.market_temporal_encoder(x_market, time_encoding=market_time_encoding)
         )
-        initial_allocation = self.allocation_smoother.initial_allocation(
-            num_scenarios=num_scenarios,
-            total_assets=num_stocks + 1,
-            device=stock_temporal_current.device,
-            dtype=stock_temporal_current.dtype,
-        )
+        if bool(return_last_step_only):
+            stock_temporal_current = stock_temporal_current[:, -1:, :, :]
+            stock_temporal_summary = stock_temporal_summary[:, -1:, :, :]
+            market_current = market_current[:, -1:, :]
+            market_summary = market_summary[:, -1:, :]
+            if stock_identity_for_scoring is not None:
+                stock_identity_for_scoring = stock_identity_for_scoring[:, -1:, :, :]
+        if initial_allocation_override is None:
+            initial_allocation = self.allocation_smoother.initial_allocation(
+                num_scenarios=num_scenarios,
+                total_assets=num_stocks + 1,
+                device=stock_temporal_current.device,
+                dtype=stock_temporal_current.dtype,
+            )
+        else:
+            expected_initial_shape = (num_scenarios, num_stocks + 1)
+            if tuple(initial_allocation_override.shape) != expected_initial_shape:
+                raise ValueError(
+                    "initial_allocation_override must have shape [S, N+1]. "
+                    f"Expected {expected_initial_shape}, received {tuple(initial_allocation_override.shape)}."
+                )
+            initial_allocation = initial_allocation_override.to(
+                device=stock_temporal_current.device,
+                dtype=stock_temporal_current.dtype,
+            )
 
         score_outputs = self.cross_sectional_scorer(
             stock_temporal_current=stock_temporal_current,
@@ -429,12 +451,18 @@ class PortfolioAttentionModel(nn.Module):
 
         portfolio_return = None
         if target_returns is not None:
+            output_time_steps = int(stock_weights.shape[1])
             expected_shape = (num_scenarios, time_steps, num_stocks)
             if target_returns.shape != expected_shape:
                 raise ValueError(
                     f"target_returns must have shape {expected_shape}, received {tuple(target_returns.shape)}."
                 )
-            portfolio_return = (stock_weights * target_returns).sum(dim=-1)
+            target_returns_for_output = (
+                target_returns[:, -output_time_steps:, :]
+                if bool(return_last_step_only)
+                else target_returns
+            )
+            portfolio_return = (stock_weights * target_returns_for_output).sum(dim=-1)
 
         debug_info = {
             "time_position_mode": self.time_position_mode,
@@ -458,7 +486,7 @@ class PortfolioAttentionModel(nn.Module):
             **market_temporal_debug_info,
         }
 
-        return {
+        outputs = {
             "stock_weights": stock_weights,
             "cash_weight": cash_weight,
             "stock_logits": stock_logits,
@@ -474,3 +502,13 @@ class PortfolioAttentionModel(nn.Module):
             "portfolio_return": portfolio_return,
             "debug_info": debug_info,
         }
+        if bool(return_state_features):
+            outputs.update(
+                {
+                    "stock_temporal_current": stock_temporal_current,
+                    "stock_temporal_summary": stock_temporal_summary,
+                    "market_current": market_current,
+                    "market_summary": market_summary,
+                }
+            )
+        return outputs

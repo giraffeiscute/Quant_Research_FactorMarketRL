@@ -13,7 +13,7 @@ from .cross_sectional import (
     CrossSectionalScoreResult,
     MLPCrossSectionalScorer,
 )
-from .critic import PortfolioCritic
+from .critic import PortfolioCritic, PortfolioQCritic, TwinPortfolioQCritic, clone_target_q_critic
 from .network import PortfolioAttentionModel
 from .task_head import AttentionPortfolioHead, MLPPortfolioHead, TaskHeadResult
 from .temp_encoders import MarketTemporalEncoder, StockTemporalEncoder
@@ -25,6 +25,7 @@ __all__ = [
     "AllocationSmoother",
     "AttentionCrossSectionalScorer",
     "AttentionPortfolioHead",
+    "clone_target_q_critic",
     "CrossSectionalScoreResult",
     "dirichlet_mean_from_logits",
     "logits_to_dirichlet_alpha",
@@ -34,6 +35,8 @@ __all__ = [
     "MLPPortfolioHead",
     "PortfolioAttentionModel",
     "PortfolioCritic",
+    "PortfolioQCritic",
     "StockTemporalEncoder",
     "TaskHeadResult",
+    "TwinPortfolioQCritic",
 ]

@@ -51,7 +51,8 @@ def run_grpo_like_policy_step_from_scored_tensors(
         evidence_scale=float(train_config.rl_training.rl_post_train_evidence_scale),
     )
     dist = Dirichlet(alpha)
-    group_size = int(train_config.rl_training.group_size)
+    grpo_config = train_config.rl_training.grpo
+    group_size = int(grpo_config.group_size)
     sampled_actions = dist.sample((group_size,))
     sampled_log_probs = dist.log_prob(sampled_actions)
     entropy = dist.entropy()
@@ -91,19 +92,19 @@ def run_grpo_like_policy_step_from_scored_tensors(
                 rolling_horizon_days=horizon_days,
                 A0=warmup_A0.unsqueeze(0).expand(group_size, -1).reshape(-1),
                 B0=warmup_B0.unsqueeze(0).expand(group_size, -1).reshape(-1),
-                dsr_var_eps=float(train_config.rl_training.dsr_var_eps),
-                reward_clip=float(train_config.rl_training.reward_clip),
+                dsr_var_eps=float(grpo_config.dsr_var_eps),
+                reward_clip=float(grpo_config.reward_clip),
             ).reshape(group_size, -1)
         elif reward_type == "rolling_sharpe":
             base_rewards = compute_rolling_sharpe_reward(
                 sampled_prediction_returns.reshape(-1, horizon_days),
-                reward_clip=float(train_config.rl_training.reward_clip),
+                reward_clip=float(grpo_config.reward_clip),
             ).reshape(group_size, -1)
         elif reward_type == "return":
             base_rewards = compute_return_reward(
                 sampled_prediction_returns.reshape(-1, horizon_days),
                 reward_scale=float(train_config.rl_training.reward_scale),
-                reward_clip=float(train_config.rl_training.reward_clip),
+                reward_clip=float(grpo_config.reward_clip),
             ).reshape(group_size, -1)
         elif reward_type == "win_rate":
             win_rate_metrics = compute_win_rate_metrics(
@@ -127,12 +128,12 @@ def run_grpo_like_policy_step_from_scored_tensors(
 
     action_dim = int(alpha.shape[-1])
     entropy_per_dim = entropy / float(action_dim)
-    entropy_loss = -float(train_config.rl_training.entropy_coef) * entropy_per_dim.mean()
+    entropy_loss = -float(grpo_config.entropy_coef) * entropy_per_dim.mean()
     policy_loss, advantages = rl_algorithms.compute_grpo_like_policy_loss(
         sampled_log_probs,  # no detach
         rewards,
         entropy=entropy,
-        entropy_coef=float(train_config.rl_training.entropy_coef),
+        entropy_coef=float(grpo_config.entropy_coef),
         entropy_normalizer=float(action_dim),
         group_dim=0,
     )

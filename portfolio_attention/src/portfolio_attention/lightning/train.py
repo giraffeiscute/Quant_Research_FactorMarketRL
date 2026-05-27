@@ -235,8 +235,10 @@ def _resolve_trainer_gradient_clip_val(train_config: TrainConfig) -> float | Non
     algorithm = str(getattr(rl_config, "algorithm", "")).strip().lower()
     if (
         bool(getattr(rl_config, "enabled", False))
-        and algorithm == "rollout_ppo"
-        and int(getattr(rl_config, "ppo_num_epochs", 1)) > 1
+        and (
+            algorithm == "sac"
+            or (algorithm == "rollout_ppo" and int(rl_config.ppo.num_epochs) > 1)
+        )
     ):
         return None
     return float(train_config.grad_clip_norm)
@@ -257,6 +259,26 @@ def _resolve_rl_metric_filter(train_config: TrainConfig) -> MetricFilterConfig:
         return MetricFilterConfig(
             preferred_metric_key_order=list(GRPO_PREFERRED_METRIC_KEY_ORDER),
             excluded_metric_keys={"val_loss_window", "lr"},
+        )
+    if algorithm == "sac":
+        return MetricFilterConfig(
+            preferred_metric_key_order=[
+                "epoch",
+                "train_sac_q_loss",
+                "train_sac_actor_loss",
+                "train_sac_temp_loss",
+                "train_sac_temp",
+                "train_sac_sampled_return",
+                "train_sac_sampled_reward_mean",
+                "train_sac_sampled_turnover",
+                "train_sac_replay_size",
+                "train_sac_context_window_steps",
+                "train_sac_update_count",
+                "val_loss",
+                "val_return",
+                "val_win_rate",
+            ],
+            excluded_metric_keys={"val_loss_window"},
         )
     return MetricFilterConfig()
 
