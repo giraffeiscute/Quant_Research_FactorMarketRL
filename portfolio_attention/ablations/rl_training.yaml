@@ -1,7 +1,7 @@
 train:
-  learning_rate: 1e-5
-  num_epochs: 150
-  early_stopping_patience: 80
+  learning_rate: 1e-6
+  num_epochs: 50
+  early_stopping_patience: 40
   turnover_penalty: 0
   enable_lr_warmup_decay: true
   lr_warmup_fraction: 0.1
@@ -9,10 +9,10 @@ train:
   rl_training:
     reward_type: dsr_day_last
     enabled: true
-    group_size: 512
-    entropy_coef: 0.01
-    alpha_min: 0.005
-    alpha_max: 100.0
+    group_size: 128
+    entropy_coef: 0.001
+    alpha_min: 1e-6
+    alpha_max: 2000.0
     rl_post_train_evidence_scale: 0.3
 data:
   sample_num_stocks: 400

@@ -1,0 +1,38 @@
+train:
+  learning_rate: 1e-5
+  num_epochs: 100
+  early_stopping_patience: 80
+  turnover_penalty: 0
+  enable_lr_warmup_decay: false
+  transaction_cost_rate: 0.001
+  rl_training:
+    reward_type: return
+    algorithm: sac
+    enabled: true
+    reward_scale: 0.01
+    alpha_min: 1e-6
+    alpha_max: 9000.0
+    rl_post_train_evidence_scale: 0.03
+    sac_gamma: 0.90
+    sac_tau: 0.005
+    sac_buffer_size: 100000
+    sac_batch_size: 168
+    sac_updates_per_batch: 1
+    sac_warmup_steps: 10000
+    sac_context_window_steps: 50
+    sac_temp_init: 0.0003
+    sac_temp_lr: 1e-4
+    sac_auto_entropy: true
+    sac_target_entropy: null
+data:
+  sample_num_stocks: 400
+  train_batch_size: 2
+  rolling_horizon_days: 30
+  rolling_stride_days: 1
+model:
+  detach_prev_weight: false
+  use_prev_weight_feature: true
+  allocation_smoothing_alpha: 1
+  inference_allocation_mode: dirichlet_mean
+  dirichlet_logit_scale: 20
+  dropout: 0.0

@@ -1,29 +1,28 @@
 train:
   learning_rate: 1e-4
-  num_epochs: 100
-  early_stopping_patience: 80
+  num_epochs: 200
+  early_stopping_patience: 180
   turnover_penalty: 0
   enable_lr_warmup_decay: false
-  # lr_warmup_fraction: 0.1
-  # lr_min_factor: 0.1
-  transaction_cost_rate: 0.001
+  transaction_cost_rate: 0
   rl_training:
-    reward_type: return
-    algorithm: "grpo_like"
     enabled: true
+    reward_type: win_rate
     group_size: 128
-    entropy_coef: 1e-5
-    alpha_min: 1e-6
+    entropy_coef: 0
+    alpha_min: 1e-5
     alpha_max: 9000.0
     rl_post_train_evidence_scale: 1
+evaluation:
+  reward_baseline: cash
 data:
-  sample_num_stocks: 400
+  sample_num_stocks: 600
   train_batch_size: 10
   rolling_horizon_days: 2
-  rolling_stride_days: 2
+  rolling_stride_days: 1
 model:
   detach_prev_weight: false
   use_prev_weight_feature: false
   allocation_smoothing_alpha: 1
   inference_allocation_mode: dirichlet_mean
-  dirichlet_logit_scale: 500
+  dirichlet_logit_scale: 3
