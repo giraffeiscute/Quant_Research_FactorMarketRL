@@ -578,6 +578,7 @@ class PortfolioPanelDataset:
             lookback_days=int(self.config.lookback_days),
             rolling_horizon_days=int(self.config.rolling_horizon_days),
             rolling_stride_days=int(self.config.rolling_stride_days),
+            rebalance_interval_days=int(self.config.rebalance_interval_days),
             price_normalization_mode=str(self.config.price_normalization_mode),
             shuffle_scenario_splits=bool(self.config.shuffle_scenario_splits),
             scenario_split_seed=int(self.config.scenario_split_seed),

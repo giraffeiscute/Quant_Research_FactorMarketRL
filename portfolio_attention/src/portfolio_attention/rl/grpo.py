@@ -19,6 +19,7 @@ from ..model.reward import (
     compute_rolling_sharpe_reward,
 )
 from . import algorithms as rl_algorithms
+from .rebalance import build_rebalance_schedule, compound_returns_by_schedule
 
 
 @dataclass(frozen=True)
@@ -42,9 +43,17 @@ def run_grpo_like_policy_step_from_scored_tensors(
     model_config: ModelConfig,
     train_config: TrainConfig,
     evaluation_config: EvaluationConfig,
+    rebalance_interval_days: int = 1,
 ) -> GRPOPolicyStepResult:
+    schedule = build_rebalance_schedule(
+        horizon_steps=horizon_days,
+        rebalance_interval_days=rebalance_interval_days,
+    )
+    reward_decision_index = schedule.num_decisions - 1
+    reward_start = schedule.starts[reward_decision_index]
+    reward_end = schedule.ends[reward_decision_index]
     alpha = logits_to_rl_post_train_dirichlet_alpha(
-        scored_logits[:, -1, :],
+        scored_logits[:, reward_start, :],
         alpha_min=float(train_config.rl_training.alpha_min),
         alpha_max=float(train_config.rl_training.alpha_max),
         logit_scale=float(model_config.dirichlet_logit_scale),
@@ -64,18 +73,37 @@ def run_grpo_like_policy_step_from_scored_tensors(
             transaction_cost_rate=float(train_config.transaction_cost_rate),
         )
         sampled_stock_weights = sampled_actions[..., :-1]
-        reward_stock_returns = scored_r_stock[:, -1, :].unsqueeze(0)
-        gross_reward_return = (sampled_stock_weights * reward_stock_returns).sum(dim=-1)
+        reward_stock_returns = scored_r_stock[:, reward_start:reward_end, :]
+        gross_daily_reward_returns = (
+            sampled_stock_weights.unsqueeze(2) * reward_stock_returns.unsqueeze(0)
+        ).sum(dim=-1)
+        if reward_end - reward_start == 1:
+            gross_reward_return = gross_daily_reward_returns[..., 0]
+        else:
+            gross_reward_return = torch.prod(1.0 + gross_daily_reward_returns, dim=-1) - 1.0
 
-        reward_previous_allocation = scored_previous_allocation[:, -1, :].unsqueeze(0)
+        reward_previous_allocation = scored_previous_allocation[:, reward_start, :].unsqueeze(0)
         sampled_turnover = 0.5 * torch.abs(sampled_actions - reward_previous_allocation).sum(dim=-1)
-        sampled_net_reward_return = apply_transaction_cost_to_returns(
-            gross_reward_return,
+        first_day_net_reward_return = apply_transaction_cost_to_returns(
+            gross_daily_reward_returns[..., 0],
             sampled_turnover,
             transaction_cost_rate=float(train_config.transaction_cost_rate),
         )
+        net_daily_reward_returns = torch.cat(
+            [first_day_net_reward_return.unsqueeze(-1), gross_daily_reward_returns[..., 1:]],
+            dim=-1,
+        )
+        if reward_end - reward_start == 1:
+            sampled_net_reward_return = first_day_net_reward_return
+        else:
+            sampled_net_reward_return = torch.prod(1.0 + net_daily_reward_returns, dim=-1) - 1.0
 
-        warmup_net_returns = net_scored_returns[:, : horizon_days - 1]
+        segment_net_returns = compound_returns_by_schedule(
+            net_scored_returns,
+            schedule=schedule,
+        )
+        reward_horizon = schedule.num_decisions
+        warmup_net_returns = segment_net_returns[:, : reward_horizon - 1]
         warmup_path = warmup_net_returns.unsqueeze(0).expand(group_size, -1, -1)
         sampled_prediction_returns = torch.cat(
             (warmup_path, sampled_net_reward_return.unsqueeze(-1)),
@@ -84,12 +112,12 @@ def run_grpo_like_policy_step_from_scored_tensors(
         reward_type = str(train_config.rl_training.reward_type).strip().lower()
         if reward_type == "dsr_day_last":
             warmup_A0, warmup_B0 = compute_dsr_warmup_stats(
-                net_scored_returns,
-                rolling_horizon_days=horizon_days,
+                segment_net_returns,
+                rolling_horizon_days=reward_horizon,
             )
             base_rewards = compute_dsr_day_reward(
-                sampled_prediction_returns.reshape(-1, horizon_days),
-                rolling_horizon_days=horizon_days,
+                sampled_prediction_returns.reshape(-1, reward_horizon),
+                rolling_horizon_days=reward_horizon,
                 A0=warmup_A0.unsqueeze(0).expand(group_size, -1).reshape(-1),
                 B0=warmup_B0.unsqueeze(0).expand(group_size, -1).reshape(-1),
                 dsr_var_eps=float(grpo_config.dsr_var_eps),
@@ -97,19 +125,24 @@ def run_grpo_like_policy_step_from_scored_tensors(
             ).reshape(group_size, -1)
         elif reward_type == "rolling_sharpe":
             base_rewards = compute_rolling_sharpe_reward(
-                sampled_prediction_returns.reshape(-1, horizon_days),
+                sampled_prediction_returns.reshape(-1, reward_horizon),
                 reward_clip=float(grpo_config.reward_clip),
             ).reshape(group_size, -1)
         elif reward_type == "return":
             base_rewards = compute_return_reward(
-                sampled_prediction_returns.reshape(-1, horizon_days),
+                sampled_prediction_returns.reshape(-1, reward_horizon),
                 reward_scale=float(train_config.rl_training.reward_scale),
                 reward_clip=float(grpo_config.reward_clip),
             ).reshape(group_size, -1)
         elif reward_type == "win_rate":
+            baseline_stock_returns = (
+                reward_stock_returns[:, 0, :]
+                if reward_end - reward_start == 1
+                else torch.prod(1.0 + reward_stock_returns, dim=1) - 1.0
+            ).unsqueeze(0)
             win_rate_metrics = compute_win_rate_metrics(
                 sampled_net_reward_return,
-                reward_stock_returns,
+                baseline_stock_returns,
                 reward_previous_allocation,
                 reward_baseline=str(evaluation_config.reward_baseline),
                 transaction_cost_rate=float(train_config.transaction_cost_rate),

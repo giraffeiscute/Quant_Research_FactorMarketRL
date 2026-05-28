@@ -11,6 +11,7 @@ from ..common.net_return import apply_transaction_cost_to_returns
 from ..config import ModelConfig, TrainConfig
 from ..model.allocation_distribution import logits_to_rl_post_train_dirichlet_alpha
 from ..model.reward import apply_turnover_reward_penalty
+from .rebalance import build_rebalance_schedule, gather_decision_steps
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ def sample_rollout_path(
     *,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    rebalance_interval_days: int = 1,
 ) -> RolloutPathResult:
     """Collect one sampled rolling allocation path per scenario/window.
 
@@ -60,6 +62,12 @@ def sample_rollout_path(
     reward_scale, reward_clip = _validate_rollout_reward_config(train_config)
 
     time_steps = int(scored_logits.shape[1])
+    schedule = build_rebalance_schedule(
+        horizon_steps=time_steps,
+        rebalance_interval_days=rebalance_interval_days,
+    )
+    decision_logits = gather_decision_steps(scored_logits, schedule=schedule)
+    decision_values = gather_decision_steps(value_prediction, schedule=schedule)
     previous_action = initial_previous_allocation
 
     sampled_actions: list[torch.Tensor] = []
@@ -72,9 +80,9 @@ def sample_rollout_path(
     sampled_reward_penalty: list[torch.Tensor] = []
     entropy: list[torch.Tensor] = []
 
-    for timestep in range(time_steps):
+    for decision_index, (start, end) in enumerate(zip(schedule.starts, schedule.ends)):
         alpha_t = logits_to_rl_post_train_dirichlet_alpha(
-            scored_logits[:, timestep, :],
+            decision_logits[:, decision_index, :],
             alpha_min=float(train_config.rl_training.alpha_min),
             alpha_max=float(train_config.rl_training.alpha_max),
             logit_scale=float(model_config.dirichlet_logit_scale),
@@ -88,12 +96,24 @@ def sample_rollout_path(
 
         turnover_t = 0.5 * torch.abs(action_t - previous_action).sum(dim=-1)
         stock_weights_t = action_t[:, :-1]
-        gross_return_t = (stock_weights_t * scored_r_stock[:, timestep, :]).sum(dim=-1)
-        net_return_t = apply_transaction_cost_to_returns(
-            gross_return_t,
+        gross_daily_returns_t = (
+            scored_r_stock[:, start:end, :] * stock_weights_t.unsqueeze(1)
+        ).sum(dim=-1)
+        first_day_net_return_t = apply_transaction_cost_to_returns(
+            gross_daily_returns_t[:, 0],
             turnover_t,
             transaction_cost_rate=float(train_config.transaction_cost_rate),
         )
+        net_daily_returns_t = torch.cat(
+            [first_day_net_return_t.unsqueeze(1), gross_daily_returns_t[:, 1:]],
+            dim=1,
+        )
+        if end - start == 1:
+            gross_return_t = gross_daily_returns_t[:, 0]
+            net_return_t = first_day_net_return_t
+        else:
+            gross_return_t = torch.prod(1.0 + gross_daily_returns_t, dim=1) - 1.0
+            net_return_t = torch.prod(1.0 + net_daily_returns_t, dim=1) - 1.0
         base_reward_t = net_return_t / reward_scale
         base_reward_t = base_reward_t.clamp(
             min=-reward_clip,
@@ -129,7 +149,7 @@ def sample_rollout_path(
         sampled_base_rewards=torch.stack(sampled_base_rewards, dim=1),
         sampled_rewards=torch.stack(sampled_rewards, dim=1),
         sampled_reward_penalty=torch.stack(sampled_reward_penalty, dim=1),
-        old_values=value_prediction.detach(),
+        old_values=decision_values.detach(),
         entropy=torch.stack(entropy, dim=1),
     )
 

@@ -100,6 +100,7 @@ def run_rl_policy_step(
             raw_allocation=raw_allocation,
             model_config=model_config,
             train_config=train_config,
+            rebalance_interval_days=int(data_config.rebalance_interval_days),
         )
         return RLPolicyStepResult(
             policy_loss=ppo_result.policy_loss,
@@ -121,6 +122,7 @@ def run_rl_policy_step(
             model_config=model_config,
             train_config=train_config,
             evaluation_config=resolved_evaluation_config,
+            rebalance_interval_days=int(data_config.rebalance_interval_days),
         )
         return RLPolicyStepResult(
             policy_loss=grpo_result.policy_loss,

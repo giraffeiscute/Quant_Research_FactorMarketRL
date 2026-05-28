@@ -9,6 +9,7 @@ import torch
 
 from ..common.net_return import apply_transaction_cost_to_returns
 from ..common.utils import apply_score_mask
+from .rebalance import build_rebalance_schedule
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,7 @@ def collect_sac_transitions_from_rollout(
     *,
     transaction_cost_rate: float = 0.0,
     reward_scale: float = 1.0,
+    rebalance_interval_days: int = 1,
     context_window_steps: int | None = None,
     stock_temporal_current: torch.Tensor | None = None,
     stock_temporal_summary: torch.Tensor | None = None,
@@ -157,12 +159,17 @@ def collect_sac_transitions_from_rollout(
         scored_r_stock=scored_r_stock,
         stock_indices=stock_indices,
         actions=actions,
+        rebalance_interval_days=rebalance_interval_days,
     )
     reward_scale = float(reward_scale)
     if reward_scale <= 0.0:
         raise ValueError(f"reward_scale must be > 0, received {reward_scale}.")
 
     batch_size, horizon_steps, num_stocks, _ = scored_x_stock.shape
+    schedule = build_rebalance_schedule(
+        horizon_steps=horizon_steps,
+        rebalance_interval_days=rebalance_interval_days,
+    )
     full_time_steps = int(x_stock.shape[1])
     context_steps = (
         full_time_steps
@@ -171,37 +178,42 @@ def collect_sac_transitions_from_rollout(
     )
     if context_steps <= 0:
         raise ValueError(f"context_window_steps must be positive, received {context_steps}.")
-    action_dim = num_stocks + 1
     previous_allocation = _previous_allocations_from_actions(actions)
     next_previous_allocation = actions.detach()
-    stock_weights = actions[..., :-1]
-    gross_returns = (stock_weights * scored_r_stock).sum(dim=-1)
-    turnover = 0.5 * torch.abs(actions - previous_allocation).sum(dim=-1)
-    net_returns = apply_transaction_cost_to_returns(
-        gross_returns,
-        turnover,
+    rewards = _segment_net_returns_from_actions(
+        scored_r_stock=scored_r_stock,
+        actions=actions,
+        previous_allocation=previous_allocation,
+        schedule=schedule,
         transaction_cost_rate=float(transaction_cost_rate),
-    )
-    rewards = net_returns / reward_scale
-    done = torch.zeros(batch_size, horizon_steps, dtype=torch.bool, device=actions.device)
+    ) / reward_scale
+    decision_steps = schedule.num_decisions
+    done = torch.zeros(batch_size, decision_steps, dtype=torch.bool, device=actions.device)
     done[:, -1] = True
 
-    flat_indices = _flatten_transition_indices(batch_size, horizon_steps, device=actions.device)
+    flat_indices = _flatten_transition_indices(batch_size, decision_steps, device=actions.device)
     score_positions = _score_positions(score_mask).to(device=actions.device)
-    next_time_indices = torch.clamp(flat_indices["time"] + 1, max=horizon_steps - 1)
+    decision_start_indices = torch.tensor(schedule.starts, dtype=torch.long, device=actions.device)
+    next_decision_indices = torch.tensor(
+        schedule.starts[1:] + (schedule.starts[-1],),
+        dtype=torch.long,
+        device=actions.device,
+    )
+    flat_time_indices = decision_start_indices.index_select(0, flat_indices["time"])
+    next_time_indices = next_decision_indices.index_select(0, flat_indices["time"])
     flat_stock_indices = stock_indices.index_select(0, flat_indices["batch"])
     x_stock_windows = _gather_causal_context_windows(
         x_stock,
         score_positions=score_positions,
         flat_batch_indices=flat_indices["batch"],
-        flat_time_indices=flat_indices["time"],
+        flat_time_indices=flat_time_indices,
         context_window_steps=context_steps,
     )
     x_market_windows = _gather_causal_context_windows(
         x_market,
         score_positions=score_positions,
         flat_batch_indices=flat_indices["batch"],
-        flat_time_indices=flat_indices["time"],
+        flat_time_indices=flat_time_indices,
         context_window_steps=context_steps,
     )
     next_x_stock_windows = _gather_causal_context_windows(
@@ -222,7 +234,7 @@ def collect_sac_transitions_from_rollout(
     feature_kwargs = _collect_feature_transition_kwargs(
         score_mask=score_mask,
         flat_batch_indices=flat_indices["batch"],
-        flat_time_indices=flat_indices["time"],
+        flat_time_indices=flat_time_indices,
         next_time_indices=next_time_indices,
         stock_temporal_current=stock_temporal_current,
         stock_temporal_summary=stock_temporal_summary,
@@ -263,6 +275,40 @@ def _previous_allocations_from_actions(actions: torch.Tensor) -> torch.Tensor:
     if int(actions.shape[1]) > 1:
         previous[:, 1:, :] = actions[:, :-1, :]
     return previous
+
+
+def _segment_net_returns_from_actions(
+    *,
+    scored_r_stock: torch.Tensor,
+    actions: torch.Tensor,
+    previous_allocation: torch.Tensor,
+    schedule: Any,
+    transaction_cost_rate: float,
+) -> torch.Tensor:
+    segment_returns: list[torch.Tensor] = []
+    for decision_index, (start, end) in enumerate(zip(schedule.starts, schedule.ends)):
+        action_t = actions[:, decision_index, :]
+        stock_weights_t = action_t[:, :-1]
+        gross_daily_returns = (
+            scored_r_stock[:, start:end, :] * stock_weights_t.unsqueeze(1)
+        ).sum(dim=-1)
+        turnover_t = 0.5 * torch.abs(
+            action_t - previous_allocation[:, decision_index, :]
+        ).sum(dim=-1)
+        first_day_net_return = apply_transaction_cost_to_returns(
+            gross_daily_returns[:, 0],
+            turnover_t,
+            transaction_cost_rate=transaction_cost_rate,
+        )
+        net_daily_returns = torch.cat(
+            [first_day_net_return.unsqueeze(1), gross_daily_returns[:, 1:]],
+            dim=1,
+        )
+        if end - start == 1:
+            segment_returns.append(first_day_net_return)
+        else:
+            segment_returns.append(torch.prod(1.0 + net_daily_returns, dim=1) - 1.0)
+    return torch.stack(segment_returns, dim=1)
 
 
 def _flatten_transition_indices(
@@ -409,6 +455,7 @@ def _validate_collector_inputs(
     scored_r_stock: torch.Tensor,
     stock_indices: torch.Tensor,
     actions: torch.Tensor,
+    rebalance_interval_days: int = 1,
 ) -> None:
     if scored_x_stock.ndim != 4:
         raise ValueError("scored x_stock must have shape [B, T, N, F_stock].")
@@ -421,9 +468,13 @@ def _validate_collector_inputs(
         raise ValueError("r_stock must have scored shape [B, T, N].")
     if tuple(stock_indices.shape) != (batch_size, num_stocks):
         raise ValueError("stock_indices must have shape [B, N].")
-    if tuple(actions.shape) != (batch_size, horizon_steps, num_stocks + 1):
+    schedule = build_rebalance_schedule(
+        horizon_steps=horizon_steps,
+        rebalance_interval_days=rebalance_interval_days,
+    )
+    if tuple(actions.shape) != (batch_size, schedule.num_decisions, num_stocks + 1):
         raise ValueError(
-            "actions must have shape [B, T, N+1] matching scored rollout and cash. "
+            "actions must have shape [B, decision_steps, N+1] matching the rebalance schedule and cash. "
             f"Received actions={tuple(actions.shape)} scored_x_stock={tuple(scored_x_stock.shape)}."
         )
     _validate_simplex(actions, name="actions")

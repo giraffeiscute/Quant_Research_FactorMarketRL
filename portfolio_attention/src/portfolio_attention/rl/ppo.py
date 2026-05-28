@@ -9,6 +9,7 @@ import torch
 from ..config import ModelConfig, TrainConfig
 from . import algorithms as rl_algorithms
 from .distributions import RolloutPPOPolicyScoring, compute_dirichlet_log_probs_from_logits
+from .rebalance import build_rebalance_schedule, gather_decision_steps
 from .rollout import sample_rollout_path
 from .rollout_targets import (
     compute_discounted_reward_targets,
@@ -66,6 +67,7 @@ def collect_rollout_ppo_batch(
     value_prediction: torch.Tensor,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    rebalance_interval_days: int = 1,
 ) -> RolloutPPOBatch:
     ppo_config = train_config.rl_training.ppo
     rollout = sample_rollout_path(
@@ -75,6 +77,7 @@ def collect_rollout_ppo_batch(
         value_prediction=value_prediction,
         model_config=model_config,
         train_config=train_config,
+        rebalance_interval_days=rebalance_interval_days,
     )
     targets = compute_discounted_reward_targets(
         rollout.sampled_rewards,
@@ -108,8 +111,21 @@ def compute_rollout_ppo_update_loss(
     ppo_batch: RolloutPPOBatch,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    rebalance_interval_days: int = 1,
 ) -> RolloutPPOUpdateResult:
     ppo_config = train_config.rl_training.ppo
+    schedule = build_rebalance_schedule(
+        horizon_steps=int(scored_logits.shape[1]),
+        rebalance_interval_days=rebalance_interval_days,
+    )
+    if schedule.num_decisions != int(ppo_batch.sampled_actions.shape[1]):
+        raise ValueError(
+            "PPO update rebalance schedule does not match collected actions. "
+            f"rebalance_interval_days={rebalance_interval_days} "
+            f"scored_logits={tuple(scored_logits.shape)} actions={tuple(ppo_batch.sampled_actions.shape)}."
+        )
+    scored_logits = gather_decision_steps(scored_logits, schedule=schedule)
+    scored_value_prediction = gather_decision_steps(scored_value_prediction, schedule=schedule)
     policy_scoring = compute_dirichlet_log_probs_from_logits(
         scored_logits,
         ppo_batch.sampled_actions,

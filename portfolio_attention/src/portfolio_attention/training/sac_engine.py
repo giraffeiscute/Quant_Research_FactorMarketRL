@@ -13,9 +13,10 @@ from typing import Any
 import torch
 
 from ..common.utils import apply_score_mask
-from ..config import ModelConfig, TrainConfig
+from ..config import DataConfig, ModelConfig, TrainConfig
 from ..model import PortfolioAttentionModel
 from ..rl.replay import SACTransitionBatch, collect_sac_transitions_from_rollout
+from ..rl.rebalance import build_rebalance_schedule, gather_decision_steps
 from ..rl.sac_policy import build_dirichlet_sac_policy
 
 
@@ -34,6 +35,7 @@ def collect_sac_training_batch(
     model: PortfolioAttentionModel,
     batch: dict[str, Any],
     *,
+    data_config: DataConfig,
     model_config: ModelConfig,
     train_config: TrainConfig,
 ) -> SACTrainingCollection:
@@ -48,8 +50,13 @@ def collect_sac_training_batch(
         score_mask = _require_score_mask(batch)
         allocation_logits = _require_tensor(outputs, "allocation_logits")
         scored_logits = apply_score_mask(allocation_logits, score_mask)
+        schedule = build_rebalance_schedule(
+            horizon_steps=int(scored_logits.shape[1]),
+            rebalance_interval_days=int(data_config.rebalance_interval_days),
+        )
+        decision_logits = gather_decision_steps(scored_logits, schedule=schedule)
         policy = build_dirichlet_sac_policy(
-            scored_logits,
+            decision_logits,
             model_config=model_config,
             train_config=train_config,
         )
@@ -59,6 +66,7 @@ def collect_sac_training_batch(
             actions,
             transaction_cost_rate=float(train_config.transaction_cost_rate),
             reward_scale=float(train_config.rl_training.reward_scale),
+            rebalance_interval_days=int(data_config.rebalance_interval_days),
             context_window_steps=_resolve_sac_context_window_steps(
                 train_config,
                 full_time_steps=int(batch["x_stock"].shape[1]),
@@ -68,7 +76,7 @@ def collect_sac_training_batch(
         sampled_net_returns = _reshape_transition_values(
             transitions.reward,
             batch_size=int(actions.shape[0]),
-            horizon_steps=int(actions.shape[1]),
+            horizon_steps=schedule.num_decisions,
         ) * float(train_config.rl_training.reward_scale)
         sampled_turnover = _sampled_action_turnover(actions)
         scenario_final_returns = torch.prod(1.0 + sampled_net_returns, dim=1) - 1.0

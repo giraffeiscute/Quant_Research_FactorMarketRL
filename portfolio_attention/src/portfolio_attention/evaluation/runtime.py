@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from ..config import EvaluationConfig
 from ..data.dataset import PortfolioPanelDataset, scale_stock_feature_context_array
+from ..rl.rebalance import build_rebalance_schedule
 from .results import build_legacy_per_scenario_payload
 from .types import RollingScenarioOutputs
 from ..model import PortfolioAttentionModel
@@ -127,6 +128,7 @@ def collect_single_scenario_rolling_outputs(
     device: torch.device,
     lookback_days: int,
     evaluation_label: str,
+    rebalance_interval_days: int = 1,
     collect_weights: bool = True,
     interrupt_checker: Callable[[], None] | None = None,
 ) -> RollingScenarioOutputs:
@@ -177,14 +179,20 @@ def collect_single_scenario_rolling_outputs(
             f"Received full_time_steps={full_time_steps}, lookback_days={resolved_lookback_days}."
         )
 
+    schedule = build_rebalance_schedule(
+        horizon_steps=int(scored_positions.numel()),
+        rebalance_interval_days=rebalance_interval_days,
+    )
+    decision_ordinals = set(schedule.starts)
     portfolio_returns_by_day: list[torch.Tensor] = []
     turnover_by_day: list[torch.Tensor] = []
     stock_weights_by_day: list[torch.Tensor] = []
     cash_weights_by_day: list[torch.Tensor] = []
     previous_allocation_by_day: list[torch.Tensor] = []
+    current_allocation: torch.Tensor | None = None
     if interrupt_checker is not None:
         interrupt_checker()
-    for scored_position in scored_positions.tolist():
+    for scored_ordinal, scored_position in enumerate(scored_positions.tolist()):
         if interrupt_checker is not None:
             interrupt_checker()
         window_start = int(scored_position) - resolved_lookback_days
@@ -201,58 +209,96 @@ def collect_single_scenario_rolling_outputs(
                 f"for scenario {scenario_id}: stop={window_stop} full_time_steps={full_time_steps}."
             )
 
-        window_batch = _slice_single_scenario_rolling_window_batch(
-            raw_batch,
-            window_start=window_start,
-            window_stop=window_stop,
-        )
-        window_batch = _rebuild_evaluation_window_x_stock(
-            window_batch=window_batch,
-            dataset=dataset,
-            evaluation_label=evaluation_label,
-        )
-        window_batch = _move_batch_to_device(window_batch, device)
-        with torch.no_grad():
-            outputs = model(
-                window_batch["x_stock"],
-                window_batch["x_market"],
-                window_batch["stock_indices"],
-                target_returns=window_batch["r_stock"],
+        if scored_ordinal in decision_ordinals:
+            window_batch = _slice_single_scenario_rolling_window_batch(
+                raw_batch,
+                window_start=window_start,
+                window_stop=window_stop,
             )
+            window_batch = _rebuild_evaluation_window_x_stock(
+                window_batch=window_batch,
+                dataset=dataset,
+                evaluation_label=evaluation_label,
+            )
+            window_batch = _move_batch_to_device(window_batch, device)
+            initial_allocation_override = (
+                current_allocation.unsqueeze(0).to(device)
+                if current_allocation is not None
+                else None
+            )
+            with torch.no_grad():
+                try:
+                    outputs = model(
+                        window_batch["x_stock"],
+                        window_batch["x_market"],
+                        window_batch["stock_indices"],
+                        target_returns=window_batch["r_stock"],
+                        initial_allocation_override=initial_allocation_override,
+                        return_last_step_only=True,
+                    )
+                except TypeError:
+                    outputs = model(
+                        window_batch["x_stock"],
+                        window_batch["x_market"],
+                        window_batch["stock_indices"],
+                        target_returns=window_batch["r_stock"],
+                    )
 
-        path_returns = outputs["portfolio_return"]
-        if path_returns is None:
-            raise RuntimeError(f"{evaluation_label} requires target returns for every window.")
-        if path_returns.shape != (1, context_time_steps):
-            raise RuntimeError(
-                f"{evaluation_label} expected portfolio_return with shape "
-                f"(1, {context_time_steps}), received {tuple(path_returns.shape)}."
-            )
-        turnover = outputs.get("turnover")
-        if not isinstance(turnover, torch.Tensor):
-            raise RuntimeError(f"{evaluation_label} requires turnover for every window.")
-        if turnover.shape != (1, context_time_steps):
-            raise RuntimeError(
-                f"{evaluation_label} expected turnover with shape "
-                f"(1, {context_time_steps}), received {tuple(turnover.shape)}."
-            )
-
-        portfolio_returns_by_day.append(path_returns[:, -1].detach().cpu().squeeze(0))
-        turnover_by_day.append(turnover[:, -1].detach().cpu().squeeze(0))
-        if collect_weights:
+            path_returns = outputs["portfolio_return"]
+            if path_returns is None:
+                raise RuntimeError(f"{evaluation_label} requires target returns for every window.")
+            if path_returns.shape not in {(1, 1), (1, context_time_steps)}:
+                raise RuntimeError(
+                    f"{evaluation_label} expected portfolio_return with shape "
+                    f"(1, 1) or (1, {context_time_steps}), received {tuple(path_returns.shape)}."
+                )
             stock_weights = outputs.get("stock_weights")
             cash_weights = outputs.get("cash_weight")
             previous_allocation = outputs.get("previous_allocation")
-            if stock_weights is None or cash_weights is None or previous_allocation is None:
+            if stock_weights is None or cash_weights is None:
                 raise RuntimeError(
-                    f"{evaluation_label} requires stock_weights, cash_weight, and previous_allocation "
-                    "for every window."
+                    f"{evaluation_label} requires stock_weights and cash_weight "
+                    "for every decision window."
                 )
-            stock_weights_by_day.append(stock_weights[:, -1, :].detach().cpu().squeeze(0))
-            cash_weights_by_day.append(cash_weights[:, -1].detach().cpu().squeeze(0))
-            previous_allocation_by_day.append(
-                previous_allocation[:, -1, :].detach().cpu().squeeze(0)
+            allocation = torch.cat(
+                [stock_weights[:, -1, :], cash_weights[:, -1:].reshape(1, 1)],
+                dim=-1,
+            ).detach().cpu().squeeze(0)
+            previous_for_turnover = (
+                current_allocation
+                if current_allocation is not None
+                else previous_allocation[:, -1, :].detach().cpu().squeeze(0)
+                if isinstance(previous_allocation, torch.Tensor)
+                else allocation
             )
+            turnover = outputs.get("turnover")
+            if current_allocation is None and not isinstance(previous_allocation, torch.Tensor) and isinstance(turnover, torch.Tensor):
+                turnover_value = turnover[:, -1].detach().cpu().squeeze(0)
+            else:
+                turnover_value = 0.5 * torch.abs(allocation - previous_for_turnover).sum()
+            portfolio_return_value = path_returns[:, -1].detach().cpu().squeeze(0)
+            current_allocation = allocation
+        else:
+            if current_allocation is None:
+                raise RuntimeError(
+                    f"{evaluation_label} encountered a non-decision day before any allocation."
+                )
+            raw_stock_returns = raw_batch.get("r_stock")
+            if not isinstance(raw_stock_returns, torch.Tensor):
+                raise RuntimeError(f"{evaluation_label} requires tensor r_stock.")
+            stock_return_t = raw_stock_returns[0, scored_position, :].detach().cpu()
+            previous_for_turnover = current_allocation
+            portfolio_return_value = (current_allocation[:-1] * stock_return_t).sum()
+            turnover_value = torch.zeros((), dtype=portfolio_return_value.dtype)
+
+        portfolio_returns_by_day.append(portfolio_return_value)
+        turnover_by_day.append(turnover_value)
+        if collect_weights:
+            if current_allocation is None:
+                raise RuntimeError(f"{evaluation_label} did not produce an allocation.")
+            stock_weights_by_day.append(current_allocation[:-1])
+            cash_weights_by_day.append(current_allocation[-1])
+            previous_allocation_by_day.append(previous_for_turnover)
         if interrupt_checker is not None:
             interrupt_checker()
 
@@ -296,9 +342,15 @@ def _collect_single_scenario_rolling_one_step_outputs(
     device: torch.device,
     lookback_days: int,
     evaluation_label: str,
+    rebalance_interval_days: int | None = None,
     collect_weights: bool = True,
     interrupt_checker: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
+    resolved_rebalance_interval_days = (
+        int(rebalance_interval_days)
+        if rebalance_interval_days is not None
+        else int(getattr(getattr(dataset, "metadata", None), "rebalance_interval_days", 1))
+    )
     return collect_single_scenario_rolling_outputs(
         model=model,
         dataset=dataset,
@@ -306,6 +358,7 @@ def _collect_single_scenario_rolling_one_step_outputs(
         device=device,
         lookback_days=lookback_days,
         evaluation_label=evaluation_label,
+        rebalance_interval_days=resolved_rebalance_interval_days,
         collect_weights=collect_weights,
         interrupt_checker=interrupt_checker,
     ).to_legacy_payload()
@@ -328,6 +381,7 @@ def _collect_single_holdout_scenario_payload(
         raw_batch=raw_batch,
         device=device,
         lookback_days=int(dataset.metadata.lookback_days),
+        rebalance_interval_days=int(getattr(dataset.metadata, "rebalance_interval_days", 1)),
         evaluation_label="Holdout rolling evaluation",
         collect_weights=True,
         interrupt_checker=interrupt_checker,

@@ -41,6 +41,7 @@ def run_rollout_ppo_policy_step(
     raw_allocation: torch.Tensor,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    rebalance_interval_days: int = 1,
 ) -> RolloutPPOPolicyStepResult:
     """Run a single-epoch rollout PPO policy step from scored model tensors."""
     ppo_batch = collect_rollout_ppo_batch(
@@ -50,6 +51,7 @@ def run_rollout_ppo_policy_step(
         value_prediction=scored_value_prediction,
         model_config=model_config,
         train_config=train_config,
+        rebalance_interval_days=rebalance_interval_days,
     )
     ppo_update = compute_rollout_ppo_update_loss(
         scored_logits=scored_logits,
@@ -57,6 +59,7 @@ def run_rollout_ppo_policy_step(
         ppo_batch=ppo_batch,
         model_config=model_config,
         train_config=train_config,
+        rebalance_interval_days=rebalance_interval_days,
     )
     with torch.no_grad():
         net_scored_returns = apply_transaction_cost_to_returns(
@@ -128,6 +131,7 @@ def run_rollout_ppo_update(
         ppo_batch=ppo_batch,
         model_config=model_config,
         train_config=train_config,
+        rebalance_interval_days=int(data_config.rebalance_interval_days),
     )
 
 
@@ -177,6 +181,7 @@ def collect_rollout_ppo_training_batch(
         value_prediction=scored_value_prediction,
         model_config=model_config,
         train_config=train_config,
+        rebalance_interval_days=int(data_config.rebalance_interval_days),
     )
     with torch.no_grad():
         net_scored_returns = apply_transaction_cost_to_returns(

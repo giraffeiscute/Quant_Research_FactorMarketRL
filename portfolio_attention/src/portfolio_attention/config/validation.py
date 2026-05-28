@@ -185,6 +185,13 @@ def validate_data_config(config: DataConfig) -> None:
             f"received {config.rolling_stride_days}."
         )
 
+    config.rebalance_interval_days = int(config.rebalance_interval_days)
+    if config.rebalance_interval_days <= 0:
+        raise ValueError(
+            "DataConfig.rebalance_interval_days must be positive, "
+            f"received {config.rebalance_interval_days}."
+        )
+
     valid_rolling_train_dataset_modes = {"lazy", "eager"}
     if config.rolling_train_dataset_mode not in valid_rolling_train_dataset_modes:
         raise ValueError(

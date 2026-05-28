@@ -63,6 +63,7 @@ class ScenarioDatasetMetadata:
     lookback_days: int
     rolling_horizon_days: int
     rolling_stride_days: int
+    rebalance_interval_days: int
     price_normalization_mode: str
     shuffle_scenario_splits: bool
     scenario_split_seed: int

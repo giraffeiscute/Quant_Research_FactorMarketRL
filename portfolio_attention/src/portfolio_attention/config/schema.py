@@ -87,6 +87,7 @@ class DataConfig:
     lookback_days: int = 50
     rolling_horizon_days: int = 30
     rolling_stride_days: int = 1
+    rebalance_interval_days: int = 1
     rolling_train_dataset_mode: Literal["lazy", "eager"] = "lazy"
     price_normalization_mode: Literal["none", "relative_to_anchor"] = "relative_to_anchor"
 

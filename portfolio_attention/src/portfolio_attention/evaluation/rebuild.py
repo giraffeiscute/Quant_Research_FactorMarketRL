@@ -129,6 +129,9 @@ def _build_refresh_data_config(
             metadata.get("rolling_horizon_days", default_config.rolling_horizon_days)
         ),
         rolling_stride_days=int(metadata.get("rolling_stride_days", default_config.rolling_stride_days)),
+        rebalance_interval_days=int(
+            metadata.get("rebalance_interval_days", default_config.rebalance_interval_days)
+        ),
         rolling_train_dataset_mode=str(
             metadata.get("rolling_train_dataset_mode", default_config.rolling_train_dataset_mode)
         ),

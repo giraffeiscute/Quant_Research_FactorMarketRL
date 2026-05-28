@@ -21,6 +21,7 @@ def run_grpo_policy_step(
     model_config: ModelConfig,
     train_config: TrainConfig,
     evaluation_config: EvaluationConfig,
+    rebalance_interval_days: int = 1,
 ) -> GRPOPolicyStepResult:
     """Run the GRPO-like policy step from score-masked model tensors."""
     return run_grpo_like_policy_step_from_scored_tensors(
@@ -35,4 +36,5 @@ def run_grpo_policy_step(
         model_config=model_config,
         train_config=train_config,
         evaluation_config=evaluation_config,
+        rebalance_interval_days=rebalance_interval_days,
     )

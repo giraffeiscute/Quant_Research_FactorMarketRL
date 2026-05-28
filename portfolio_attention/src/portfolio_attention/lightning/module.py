@@ -215,6 +215,7 @@ class PortfolioLightningModule(pl.LightningModule):
         collected = collect_sac_training_batch(
             self.model,
             batch,
+            data_config=self.data_config,
             model_config=self.model_config,
             train_config=self.train_config,
         )

@@ -170,6 +170,7 @@ def compute_validation_scenario_metrics(
             raw_batch=raw_batch,
             device=device,
             lookback_days=int(dataset.metadata.lookback_days),
+            rebalance_interval_days=int(getattr(dataset.metadata, "rebalance_interval_days", 1)),
             evaluation_label="Lightning validation rolling evaluation",
             collect_weights=True,
         )
