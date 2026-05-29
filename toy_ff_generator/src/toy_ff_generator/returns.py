@@ -1,4 +1,6 @@
-"""Build contemporaneously aligned returns and prices."""
+"""
+這個模組負責把所有生成好的元件組裝成最終報酬與價格資料。
+"""
 
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ def build_panel(
     epsilon_df: pd.DataFrame,
     factor_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Merge component outputs into a long panel with same-period inputs."""
+    """把各個生成模組的輸出合併成 long panel，包含每期市場 state。"""
 
     missing_columns = [
         column_name
@@ -54,7 +56,7 @@ def build_panel(
 
 
 def compute_raw_returns(panel_df: pd.DataFrame) -> pd.DataFrame:
-    """Compute contemporaneous raw returns `r_{i,t}` from the merged panel."""
+    """依照模型方程式計算 clipping 之前的 `raw_return`。"""
 
     result_df = panel_df.copy()
     result_df["raw_return"] = (
@@ -68,7 +70,7 @@ def compute_raw_returns(panel_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clip_returns(panel_df: pd.DataFrame, limit_down: float, limit_up: float) -> pd.DataFrame:
-    """Clip raw returns into the observable `return` series."""
+    """把 `raw_return` 套用上下限，得到最終觀察到的 `return`。"""
 
     result_df = panel_df.copy()
     result_df["return"] = result_df["raw_return"].clip(lower=limit_down, upper=limit_up)
@@ -80,7 +82,7 @@ def generate_prices(
     initial_prices: Mapping[str, float],
     time_columns: Sequence[str],
 ) -> pd.DataFrame:
-    """Generate price paths from clipped returns."""
+    """使用 clipped return 依序遞推每支股票的價格路徑。"""
 
     result_df = panel_df.copy()
     time_order = {time_label: idx for idx, time_label in enumerate(time_columns)}
